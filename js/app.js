@@ -1,9 +1,5 @@
 
 
-// --- CONFIGURATION ---
-const USE_BACKEND = true;
-const API_BASE = "http://localhost:3000";
-
 // --- STATE MANAGEMENT ---
 let customSizeTimeout = null;
 let searchTimeout = null;
@@ -79,9 +75,6 @@ function initApp() {
             { id: 1, username: 'admin', password: 'sleep123', role: 'super', status: 'approved', isMain: true }
         ]));
     }
-
-    // Load Admins from Server if enabled
-    if (app.loadAdmins) app.loadAdmins();
 
     // 5. Initial Render
     render();
@@ -270,7 +263,6 @@ const app = {
     goToAdmin: () => {
         if (state.isAdminLoggedIn) {
             state.view = 'admin';
-            app.loadAdmins();
         } else {
             state.view = 'adminLogin';
         }
@@ -411,166 +403,67 @@ const app = {
     },
 
     // Admin Auth Actions
-    adminLogin: async (e) => {
+    adminLogin: (e) => {
         e.preventDefault();
         const username = e.target.username.value;
         const pass = e.target.password.value;
+        const admins = JSON.parse(localStorage.getItem('sleepSoundAdmins'));
 
-        if (USE_BACKEND) {
-            try {
-                const response = await fetch(`${API_BASE}/api/admin/login`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password: pass })
-                });
-                const data = await response.json();
+        const admin = admins.find(a => a.username === username && a.password === pass);
 
-                if (!response.ok) {
-                    alert(data.error || "Login failed");
-                    return;
-                }
+        if (!admin) return alert("Invalid credentials");
+        if (admin.status === 'pending') return alert("Account pending approval from Main Admin.");
+        if (admin.status === 'rejected') return alert("Account rejected by Main Admin.");
 
-                state.isAdminLoggedIn = true;
-                state.adminUser = data.admin;
-                state.view = 'admin';
-                await app.loadAdmins(); // Load fresh admin list
-                render();
-            } catch (error) {
-                console.error("Login error:", error);
-                alert("Server connection failed");
-            }
-        } else {
-            const admins = JSON.parse(localStorage.getItem('sleepSoundAdmins'));
-            const admin = admins.find(a => a.username === username && a.password === pass);
-
-            if (!admin) return alert("Invalid credentials");
-            if (admin.status === 'pending') return alert("Account pending approval from Main Admin.");
-            if (admin.status === 'rejected') return alert("Account rejected by Main Admin.");
-
-            state.isAdminLoggedIn = true;
-            state.adminUser = admin;
-            state.view = 'admin';
-            render();
-        }
+        state.isAdminLoggedIn = true;
+        state.adminUser = admin;
+        state.view = 'admin';
+        render();
     },
 
-    registerAdmin: async (e) => {
+    registerAdmin: (e) => {
         e.preventDefault();
         const username = e.target.username.value;
         const pass = e.target.password.value;
         const confirm = e.target.confirmPassword.value;
-        const email = "admin@example.com"; // Placeholder email as per UI limitations
 
         if (pass !== confirm) return alert("Passwords do not match");
 
-        if (USE_BACKEND) {
-            try {
-                const response = await fetch(`${API_BASE}/api/admin/register`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password: pass, email })
-                });
-                const data = await response.json();
+        const admins = JSON.parse(localStorage.getItem('sleepSoundAdmins'));
+        if (admins.find(a => a.username === username)) return alert("Username already taken");
 
-                if (!response.ok) {
-                    alert(data.error || "Registration failed");
-                    return;
-                }
+        admins.push({
+            id: Date.now(),
+            username,
+            password: pass,
+            role: 'admin',
+            status: 'pending' // Requires approval
+        });
+        localStorage.setItem('sleepSoundAdmins', JSON.stringify(admins));
 
-                alert("Admin Request Submitted! Please wait for Main Admin approval.");
-                state.adminAuthMode = 'login';
-                render();
-            } catch (error) {
-                console.error("Registration error:", error);
-                alert("Server connection failed");
-            }
-        } else {
-            const admins = JSON.parse(localStorage.getItem('sleepSoundAdmins'));
-            if (admins.find(a => a.username === username)) return alert("Username already taken");
+        alert("Admin Request Submitted! Please wait for Main Admin approval.");
+        state.adminAuthMode = 'login';
+        render();
+    },
 
-            admins.push({
-                id: Date.now(),
-                username,
-                password: pass,
-                role: 'admin',
-                status: 'pending' // Requires approval
-            });
+    // Admin Management Actions
+    approveAdmin: (id) => {
+        const admins = JSON.parse(localStorage.getItem('sleepSoundAdmins'));
+        const adminIndex = admins.findIndex(a => a.id === id);
+        if (adminIndex > -1) {
+            admins[adminIndex].status = 'approved';
             localStorage.setItem('sleepSoundAdmins', JSON.stringify(admins));
-
-            alert("Admin Request Submitted! Please wait for Main Admin approval.");
-            state.adminAuthMode = 'login';
             render();
         }
     },
 
-    // Admin Management Actions
-    loadAdmins: async () => {
-        if (USE_BACKEND) {
-            try {
-                const response = await fetch(`${API_BASE}/api/admin/all`);
-                if (response.ok) {
-                    const admins = await response.json();
-                    // Sync with LocalStorage so the UI renders correctly without refactoring render logic
-                    localStorage.setItem('sleepSoundAdmins', JSON.stringify(admins));
-                    render();
-                }
-            } catch (error) {
-                console.error("Failed to load admins", error);
-            }
-        }
-    },
-
-    approveAdmin: async (id) => {
-        if (USE_BACKEND) {
-            try {
-                const response = await fetch(`${API_BASE}/api/admin/approve`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ id })
-                });
-                if (response.ok) {
-                    await app.loadAdmins();
-                } else {
-                    alert("Failed to approve admin");
-                }
-            } catch (error) {
-                alert("Server error");
-            }
-        } else {
-            const admins = JSON.parse(localStorage.getItem('sleepSoundAdmins'));
-            const adminIndex = admins.findIndex(a => a.id === id);
-            if (adminIndex > -1) {
-                admins[adminIndex].status = 'approved';
-                localStorage.setItem('sleepSoundAdmins', JSON.stringify(admins));
-                render();
-            }
-        }
-    },
-
-    rejectAdmin: async (id) => {
-        if (USE_BACKEND) {
-            try {
-                const response = await fetch(`${API_BASE}/api/admin/reject`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ id })
-                });
-                if (response.ok) {
-                    await app.loadAdmins();
-                } else {
-                    alert("Failed to reject admin");
-                }
-            } catch (error) {
-                alert("Server error");
-            }
-        } else {
-            const admins = JSON.parse(localStorage.getItem('sleepSoundAdmins'));
-            const adminIndex = admins.findIndex(a => a.id === id);
-            if (adminIndex > -1) {
-                admins[adminIndex].status = 'rejected';
-                localStorage.setItem('sleepSoundAdmins', JSON.stringify(admins));
-                render();
-            }
+    rejectAdmin: (id) => {
+        const admins = JSON.parse(localStorage.getItem('sleepSoundAdmins'));
+        const adminIndex = admins.findIndex(a => a.id === id);
+        if (adminIndex > -1) {
+            admins[adminIndex].status = 'rejected';
+            localStorage.setItem('sleepSoundAdmins', JSON.stringify(admins));
+            render();
         }
     },
 
