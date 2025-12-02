@@ -22,6 +22,7 @@ const state = {
     isAdminLoggedIn: false,
     adminUser: null, // Full admin object
     adminOrders: [],
+    adminUsers: [], // FIREBASE: List of all admin accounts
 
     // Checkout State
     checkoutModalOpen: false,
@@ -69,12 +70,8 @@ function initApp() {
         localStorage.setItem('sleepSoundUsers', JSON.stringify([]));
     }
 
-    // 4. Initialize Admins (Default Main Admin)
-    if (!localStorage.getItem('sleepSoundAdmins')) {
-        localStorage.setItem('sleepSoundAdmins', JSON.stringify([
-            { id: 1, username: 'admin', password: 'sleep123', role: 'main', status: 'approved', isMain: true }
-        ]));
-    }
+    // 4. Load admins from Firebase (replaces localStorage)
+    app.loadAdminsFromFirebase();
 
     // 5. Initial Render
     render();
@@ -476,35 +473,52 @@ const app = {
         render();
     },
 
+    // FIREBASE: Load all admin accounts from Firestore
+    loadAdminsFromFirebase: async function () {
+        const res = await backend.getAdmins();
+        if (res.success) {
+            state.adminUsers = res.admins;
+        } else {
+            state.adminUsers = [];
+        }
+        if (typeof render === "function") render();
+    },
+
     // Admin Management Actions
-    approveAdmin: async (id) => {
-        // FIREBASE: Approve admin via backend
+    approveAdmin: async function (id) {
+        // FIREBASE: Approve admin via backend and reload admin list
+        const ok = confirm("Approve this admin?");
+        if (!ok) return;
+
         const res = await backend.updateAdminStatus(id, 'approved');
         if (!res.success) {
             alert(res.message || 'Failed to approve admin');
             return;
         }
-        // refresh pending list
-        await loadPendingAdmins();
-        render();
+
+        // Reload admin list from Firebase
+        await app.loadAdminsFromFirebase();
     },
 
-    rejectAdmin: async (id) => {
-        // FIREBASE: Reject admin via backend
+    rejectAdmin: async function (id) {
+        // FIREBASE: Reject admin via backend and reload admin list
+        const ok = confirm("Reject this admin?");
+        if (!ok) return;
+
         const res = await backend.updateAdminStatus(id, 'rejected');
         if (!res.success) {
             alert(res.message || 'Failed to reject admin');
             return;
         }
-        await loadPendingAdmins();
-        render();
+
+        // Reload admin list from Firebase
+        await app.loadAdminsFromFirebase();
     },
 
-    removeAdmin: (id) => {
+    removeAdmin: async (id) => {
         if (!confirm("Are you sure you want to permanently remove this admin account?")) return;
 
-        const admins = JSON.parse(localStorage.getItem('sleepSoundAdmins'));
-        const adminToDelete = admins.find(a => a.id === id);
+        const adminToDelete = state.adminUsers.find(a => a.id === id);
 
         if (!adminToDelete) return;
 
@@ -514,15 +528,21 @@ const app = {
             return;
         }
 
-        const updatedAdmins = admins.filter(a => a.id !== id);
-        localStorage.setItem('sleepSoundAdmins', JSON.stringify(updatedAdmins));
+        // Remove from Firestore
+        try {
+            await firebase.firestore().collection("admins").doc(id).delete();
 
-        // If user deletes themselves (edge case if we allow it)
-        if (state.adminUser && state.adminUser.id === id) {
-            alert("You have removed your own account. Logging out.");
-            app.logout();
-        } else {
-            render(); // Refresh dashboard
+            // If user deletes themselves (edge case)
+            if (state.adminUser && state.adminUser.id === id) {
+                alert("You have removed your own account. Logging out.");
+                app.logout();
+            } else {
+                // Reload admin list from Firebase
+                await app.loadAdminsFromFirebase();
+            }
+        } catch (err) {
+            console.error("Error removing admin:", err);
+            alert("Failed to remove admin account");
         }
     },
 
@@ -1412,9 +1432,8 @@ function renderAdminDashboard() {
     const totalSales = state.adminOrders.reduce((acc, order) => acc + order.total, 0);
     const isMain = state.adminUser && state.adminUser.isMain;
 
-    // Admin Approvals Logic: pending admins will be loaded via Firestore -> loadPendingAdmins
-    // FIREBASE: No longer using localStorage for pending admins - loaded via loadPendingAdmins()
-    const allAdmins = JSON.parse(localStorage.getItem('sleepSoundAdmins') || '[]');
+    // FIREBASE: Use state.adminUsers from Firestore instead of localStorage
+    const allAdmins = state.adminUsers || [];
 
     // Calculate Branch Stats
     const branchStats = {};
@@ -1943,8 +1962,8 @@ async function loadPendingAdmins() {
                             <td class="px-6 py-4 font-bold text-gray-900">${a.username}</td>
                             <td class="px-6 py-4 text-gray-500">${requestDate}</td>
                             <td class="px-6 py-4 flex gap-2">
-                                <button onclick="app.approveAdmin('${a.id}')" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700">Approve</button>
-                                <button onclick="app.rejectAdmin('${a.id}')" class="bg-red-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-red-700">Reject</button>
+                                <button onclick="approveAdmin('${a.id}')" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700">Approve</button>
+                                <button onclick="rejectAdmin('${a.id}')" class="bg-red-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-red-700">Reject</button>
                             </td>
                         </tr>
                     `;
@@ -1955,11 +1974,23 @@ async function loadPendingAdmins() {
 }
 
 async function approveAdmin(id) {
-    await backend.updateAdminStatus(id, "approved");
-    loadPendingAdmins();
+    const res = await backend.updateAdminStatus(id, "approved");
+    if (!res.success) {
+        alert("Failed to approve admin");
+        return;
+    }
+    // Reload both pending list and admin list
+    await loadPendingAdmins();
+    await app.loadAdminsFromFirebase();
 }
 
 async function rejectAdmin(id) {
-    await backend.updateAdminStatus(id, "rejected");
-    loadPendingAdmins();
+    const res = await backend.updateAdminStatus(id, "rejected");
+    if (!res.success) {
+        alert("Failed to reject admin");
+        return;
+    }
+    // Reload both pending list and admin list
+    await loadPendingAdmins();
+    await app.loadAdminsFromFirebase();
 }

@@ -182,6 +182,21 @@ const backend = {
 
     await docRef.update({ status: decision });
     return { success: true };
+  },
+
+  // 5) Get all admin accounts from Firestore
+  async getAdmins() {
+    try {
+      const snap = await db.collection("admins").get();
+      const admins = snap.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      return { success: true, admins };
+    } catch (err) {
+      console.error("Error fetching admins:", err);
+      return { success: false, admins: [] };
+    }
   }
 };
 
