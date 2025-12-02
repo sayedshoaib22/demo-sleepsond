@@ -72,7 +72,7 @@ function initApp() {
     // 4. Initialize Admins (Default Main Admin)
     if (!localStorage.getItem('sleepSoundAdmins')) {
         localStorage.setItem('sleepSoundAdmins', JSON.stringify([
-            { id: 1, username: 'admin', password: 'sleep123', role: 'super', status: 'approved', isMain: true }
+            { id: 1, username: 'admin', password: 'sleep123', role: 'main', status: 'approved', isMain: true }
         ]));
     }
 
@@ -183,83 +183,115 @@ const app = {
         window.scrollTo({ top: 0, behavior: 'smooth' });
         render();
     },
-    trackOrder: () => {
-        const id = document.getElementById('trackInput').value.trim();
-        if (!id) return alert('Please enter an Order ID');
-
-        const order = state.adminOrders.find(o => o.id === id);
+    trackOrder: async () => {
+        const idInput = document.getElementById('trackInput');
         const resultDiv = document.getElementById('trackResult');
 
-        if (order) {
-            const steps = ['Order Placed', 'Packed', 'Out for Delivery', 'Delivered'];
-            const stepIdx = steps.indexOf(order.status);
-
-            resultDiv.innerHTML = `
-                <div class='mt-8 text-left border-t border-gray-100 pt-8 animate-fade-in'>
-                    <div class='flex flex-col md:flex-row justify-between items-start mb-8 gap-4'>
-                        <div>
-                            <h3 class='text-xl font-bold text-gray-900'>Order #${order.id}</h3>
-                            <p class='text-sm text-gray-500'>Placed on ${new Date(order.date).toLocaleDateString()}</p>
-                        </div>
-                        <div class='text-left md:text-right'>
-                            <div class='text-lg font-bold text-[#FF6B35]'>₹${order.total.toLocaleString()}</div>
-                            <div class='text-sm text-gray-600'>Branch: ${order.branch}</div>
-                        </div>
-                    </div>
-                    
-                    <div class='relative px-4 md:px-0'>
-                        <div class='absolute left-8 md:left-8 top-0 bottom-0 w-0.5 bg-gray-200'></div>
-                        <div class='space-y-8'>
-                            ${steps.map((step, idx) => {
-                const completed = idx <= stepIdx;
-                const current = idx === stepIdx;
-                return `
-                                    <div class='relative flex items-center gap-6'>
-                                        <div class='w-16 flex justify-center z-10'>
-                                            <div class='w-8 h-8 rounded-full flex items-center justify-center border-2 bg-white ${completed ? 'border-green-500 text-green-500' : 'border-gray-300 text-gray-300'} ${current ? 'ring-4 ring-green-100' : ''}'>
-                                                ${completed ? ICONS.check : `<span class="text-xs font-bold">${idx + 1}</span>`}
-                                            </div>
-                                        </div>
-                                        <div class='${completed ? 'text-gray-900 font-bold' : 'text-gray-400'}'>
-                                            ${step}
-                                            ${current ? '<span class="ml-2 text-xs bg-orange-100 text-[#FF6B35] px-2 py-0.5 rounded-full">Current Status</span>' : ''}
-                                        </div>
-                                    </div>
-                                `;
-            }).join('')}
-                        </div>
-                    </div>
-
-                    <div class='mt-8 bg-gray-50 p-6 rounded-xl border border-gray-100'>
-                        <h4 class='font-bold text-sm text-gray-900 uppercase tracking-wider mb-4'>Order Items</h4>
-                        <div class="space-y-3">
-                            ${order.items.map(i => `
-                                <div class='flex justify-between items-center text-sm'>
-                                    <div class="flex items-center gap-3">
-                                        <div class="w-10 h-10 rounded bg-gray-200 overflow-hidden">
-                                            <img src="${i.image}" class="w-full h-full object-cover">
-                                        </div>
-                                        <div>
-                                            <div class="font-medium text-gray-900">${i.name}</div>
-                                            <div class="text-xs text-gray-500">Qty: ${i.quantity} ${i.selectedDimensions ? `• ${i.selectedDimensions}` : ''}</div>
-                                        </div>
-                                    </div>
-                                    <span class="font-bold text-gray-900">₹${(i.price * i.quantity).toLocaleString()}</span>
-                                </div>
-                            `).join('')}
-                        </div>
-                    </div>
-                </div>
-            `;
-        } else {
-            resultDiv.innerHTML = `
-                <div class='mt-8 text-center py-8 bg-red-50 rounded-xl border border-red-100 animate-fade-in'>
-                    <div class="text-red-500 font-bold mb-1">Order Not Found</div>
-                    <p class="text-sm text-red-400">Please check the Order ID (e.g., SS-2024-XXXX) and try again.</p>
-                </div>
-            `;
+        const id = idInput.value.trim();
+        if (!id) {
+            alert('Please enter an Order ID');
+            return;
         }
+
+        resultDiv.innerHTML = `
+            <div class="mt-8 text-center text-gray-500 text-sm">
+                Checking your order status...
+            </div>
+        `;
+
+        const res = await backend.trackOrder(id);
+
+        if (!res.success || !res.order) {
+            resultDiv.innerHTML = `
+                <div class='mt-8 text-center py-8 bg-red-50 rounded-xl border border-red-100'>
+                    <div class="text-red-500 font-bold mb-1">Order Not Found</div>
+                    <p class="text-sm text-red-400">
+                        Please check the Order ID (e.g., SS-2024-1234) and try again.
+                    </p>
+                </div>
+            `;
+            return;
+        }
+
+        const order = res.order;
+        const steps = ['Order Placed', 'Packed', 'Out for Delivery', 'Delivered'];
+        const stepIdx = steps.indexOf(order.status);
+
+        resultDiv.innerHTML = `
+            <div class='mt-8 text-left border-t border-gray-100 pt-8'>
+                <div class='flex flex-col md:flex-row justify-between items-start mb-8 gap-4'>
+                    <div>
+                        <h3 class='text-xl font-bold text-gray-900'>Order #${order.orderCode || order.id}</h3>
+                        <p class='text-sm text-gray-500'>
+                            Placed on ${new Date(order.date).toLocaleDateString()}
+                        </p>
+                    </div>
+                    <div class='text-left md:text-right'>
+                        <div class='text-lg font-bold text-[#FF6B35]'>
+                            ₹${Number(order.total).toLocaleString()}
+                        </div>
+                        <div class='text-sm text-gray-600'>Branch: ${order.branch}</div>
+                    </div>
+                </div>
+    
+                <div class='relative px-4 md:px-0'>
+                    <div class='absolute left-8 md:left-8 top-0 bottom-0 w-0.5 bg-gray-200'></div>
+                    <div class='space-y-8'>
+                        ${steps.map((step, idx) => {
+            const completed = idx <= stepIdx;
+            const current = idx === stepIdx;
+            return `
+                                <div class='relative flex items-center gap-6'>
+                                    <div class='w-16 flex justify-center z-10'>
+                                        <div class='w-8 h-8 rounded-full flex items-center justify-center border-2 bg-white
+                                            ${completed ? 'border-green-500 text-green-500' : 'border-gray-300 text-gray-300'}
+                                            ${current ? 'ring-4 ring-green-100' : ''}'>
+                                            ${completed ? '✓' : `<span class="text-xs font-bold">${idx + 1}</span>`}
+                                        </div>
+                                    </div>
+                                    <div class='${completed ? 'text-gray-900 font-bold' : 'text-gray-400'}'>
+                                        ${step}
+                                        ${current
+                    ? '<span class="ml-2 text-xs bg-orange-100 text-[#FF6B35] px-2 py-0.5 rounded-full">Current Status</span>'
+                    : ''
+                }
+                                    </div>
+                                </div>
+                            `;
+        }).join('')}
+                    </div>
+                </div>
+    
+                <div class='mt-8 bg-gray-50 p-6 rounded-xl border border-gray-100'>
+                    <h4 class='font-bold text-sm text-gray-900 uppercase tracking-wider mb-4'>
+                        Order Items
+                    </h4>
+                    <div class="space-y-3">
+                        ${order.items.map(i => `
+                            <div class='flex justify-between items-center text-sm'>
+                                <div class="flex items-center gap-3">
+                                    <div class="w-10 h-10 rounded bg-gray-200 overflow-hidden">
+                                        <img src="${i.image}" class="w-full h-full object-cover">
+                                    </div>
+                                    <div>
+                                        <div class="font-medium text-gray-900">${i.name}</div>
+                                        <div class="text-xs text-gray-500">
+                                            Qty: ${i.quantity}
+                                            ${i.selectedDimensions ? `• ${i.selectedDimensions}` : ''}
+                                        </div>
+                                    </div>
+                                </div>
+                                <span class="font-bold text-gray-900">
+                                    ₹${(i.price * i.quantity).toLocaleString()}
+                                </span>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            </div>
+        `;
     },
+
     goToAdmin: () => {
         if (state.isAdminLoggedIn) {
             state.view = 'admin';
@@ -403,87 +435,88 @@ const app = {
     },
 
     // Admin Auth Actions
-    adminLogin: (e) => {
+    adminLogin: async (e) => {
         e.preventDefault();
-        const username = e.target.username.value;
-        const pass = e.target.password.value;
-        const admins = JSON.parse(localStorage.getItem('sleepSoundAdmins'));
 
-        const admin = admins.find(a => a.username === username && a.password === pass);
+        const username = e.target.username.value.trim();
+        const password = e.target.password.value.trim();
 
-        if (!admin) return alert("Invalid credentials");
-        if (admin.status === 'pending') return alert("Account pending approval from Main Admin.");
-        if (admin.status === 'rejected') return alert("Account rejected by Main Admin.");
+        const res = await backend.adminLogin(username, password);
 
-        state.isAdminLoggedIn = true;
-        state.adminUser = admin;
-        state.view = 'admin';
-        render();
+        if (!res.success) {
+            alert(res.message);
+            return;
+        }
+
+        state.adminUser = res.admin;
+        state.isAdminLoggedIn = true; // FIREBASE: mark admin as logged in
+        // After login, go to admin dashboard
+        app.goToAdmin();
+
+        // If main admin, load pending admin requests
+        if (state.adminUser && state.adminUser.isMain) {
+            loadPendingAdmins();
+        }
     },
 
-    registerAdmin: (e) => {
+    registerAdmin: async (e) => {
+        // FIREBASE: register admin via backend instead of localStorage
         e.preventDefault();
-        const username = e.target.username.value;
-        const pass = e.target.password.value;
-        const confirm = e.target.confirmPassword.value;
+        const username = e.target.username.value.trim();
+        const pass = e.target.password.value.trim();
+        const confirm = e.target.confirmPassword && e.target.confirmPassword.value.trim();
 
         if (pass !== confirm) return alert("Passwords do not match");
 
-        const admins = JSON.parse(localStorage.getItem('sleepSoundAdmins'));
-        if (admins.find(a => a.username === username)) return alert("Username already taken");
+        const res = await backend.registerAdmin(username, pass);
+        if (!res.success) return alert(res.message || 'Failed to request admin access');
 
-        admins.push({
-            id: Date.now(),
-            username,
-            password: pass,
-            role: 'admin',
-            status: 'pending' // Requires approval
-        });
-        localStorage.setItem('sleepSoundAdmins', JSON.stringify(admins));
-
-        alert("Admin Request Submitted! Please wait for Main Admin approval.");
+        alert(res.message);
         state.adminAuthMode = 'login';
         render();
     },
 
     // Admin Management Actions
-    approveAdmin: (id) => {
-        const admins = JSON.parse(localStorage.getItem('sleepSoundAdmins'));
-        const adminIndex = admins.findIndex(a => a.id === id);
-        if (adminIndex > -1) {
-            admins[adminIndex].status = 'approved';
-            localStorage.setItem('sleepSoundAdmins', JSON.stringify(admins));
-            render();
+    approveAdmin: async (id) => {
+        // FIREBASE: Approve admin via backend
+        const res = await backend.updateAdminStatus(id, 'approved');
+        if (!res.success) {
+            alert(res.message || 'Failed to approve admin');
+            return;
         }
+        // refresh pending list
+        await loadPendingAdmins();
+        render();
     },
 
-    rejectAdmin: (id) => {
-        const admins = JSON.parse(localStorage.getItem('sleepSoundAdmins'));
-        const adminIndex = admins.findIndex(a => a.id === id);
-        if (adminIndex > -1) {
-            admins[adminIndex].status = 'rejected';
-            localStorage.setItem('sleepSoundAdmins', JSON.stringify(admins));
-            render();
+    rejectAdmin: async (id) => {
+        // FIREBASE: Reject admin via backend
+        const res = await backend.updateAdminStatus(id, 'rejected');
+        if (!res.success) {
+            alert(res.message || 'Failed to reject admin');
+            return;
         }
+        await loadPendingAdmins();
+        render();
     },
 
     removeAdmin: (id) => {
         if (!confirm("Are you sure you want to permanently remove this admin account?")) return;
-        
+
         const admins = JSON.parse(localStorage.getItem('sleepSoundAdmins'));
         const adminToDelete = admins.find(a => a.id === id);
-        
+
         if (!adminToDelete) return;
-        
+
         // Security check for Main Admin
         if (adminToDelete.username === 'admin' || adminToDelete.isMain) {
             alert("Security Alert: The Main Admin account cannot be removed.");
             return;
         }
-        
+
         const updatedAdmins = admins.filter(a => a.id !== id);
         localStorage.setItem('sleepSoundAdmins', JSON.stringify(updatedAdmins));
-        
+
         // If user deletes themselves (edge case if we allow it)
         if (state.adminUser && state.adminUser.id === id) {
             alert("You have removed your own account. Logging out.");
@@ -494,187 +527,209 @@ const app = {
     },
 
     // Cart Logic
-        // Cart Logic
-        addToCart: (product, options = {}) => {
-            // ✅ 1. Normalized defaults (card se add ho ya detail se – same logic)
-            const normalized = {
-                selectedSize: options.selectedSize || 'Single',
-                selectedDimensions: options.selectedDimensions || '72x30',
-                selectedHeight: options.selectedHeight || '4',
-                selectedMeasurement: options.selectedMeasurement || 'Inches'
-            };
-    
-            // ✅ 2. Check: cart me already same variant hai kya?
-            const existing = state.cart.find(item => {
-                const itemSize = item.selectedSize || 'Single';
-                const itemDim = item.selectedDimensions || '72x30';
-                const itemHeight = item.selectedHeight || '4';
-                const itemMeasurement = item.selectedMeasurement || 'Inches';
-    
-                return (
-                    item.id === product.id &&
-                    itemSize === normalized.selectedSize &&
-                    itemDim === normalized.selectedDimensions &&
-                    itemHeight === normalized.selectedHeight &&
-                    itemMeasurement === normalized.selectedMeasurement
-                );
+    addToCart: (product, options = {}) => {
+        // ✅ 1. Normalized defaults (card se add ho ya detail se – same logic)
+        const normalized = {
+            selectedSize: options.selectedSize || 'Single',
+            selectedDimensions: options.selectedDimensions || '72x30',
+            selectedHeight: options.selectedHeight || '4',
+            selectedMeasurement: options.selectedMeasurement || 'Inches'
+        };
+
+        // ✅ 2. Check: cart me already same variant hai kya?
+        const existing = state.cart.find(item => {
+            const itemSize = item.selectedSize || 'Single';
+            const itemDim = item.selectedDimensions || '72x30';
+            const itemHeight = item.selectedHeight || '4';
+            const itemMeasurement = item.selectedMeasurement || 'Inches';
+
+            return (
+                item.id === product.id &&
+                itemSize === normalized.selectedSize &&
+                itemDim === normalized.selectedDimensions &&
+                itemHeight === normalized.selectedHeight &&
+                itemMeasurement === normalized.selectedMeasurement
+            );
+        });
+
+        if (existing) {
+            // ✅ Same product + same size/dimension/height/measurement → sirf quantity badhao
+            existing.quantity += 1;
+
+            // Agar detail page se updated price aa raha ho to usko refresh bhi kar sakte ho (optional)
+            if (typeof options.price === 'number') {
+                existing.price = options.price;
+            }
+        } else {
+            // ✅ Pehli baar add ho raha hai → normalized properties ke saath push karo
+            state.cart.push({
+                ...product,
+                quantity: 1,
+                ...normalized,
+                ...options   // explicit options (jaise currentPrice) ko override karne do
             });
-    
-            if (existing) {
-                // ✅ Same product + same size/dimension/height/measurement → sirf quantity badhao
-                existing.quantity += 1;
-    
-                // Agar detail page se updated price aa raha ho to usko refresh bhi kar sakte ho (optional)
-                if (typeof options.price === 'number') {
-                    existing.price = options.price;
-                }
-            } else {
-                // ✅ Pehli baar add ho raha hai → normalized properties ke saath push karo
-                state.cart.push({
-                    ...product,
-                    quantity: 1,
-                    ...normalized,
-                    ...options   // explicit options (jaise currentPrice) ko override karne do
-                });
-            }
-    
+        }
+
+        saveCart();
+        state.isCartOpen = true;
+        render();
+    },
+
+    removeFromCart: (index) => {
+        state.cart.splice(index, 1);
+        saveCart();
+        render();
+    },
+
+    updateQuantity: (index, delta) => {
+        const item = state.cart[index];
+        if (item) {
+            item.quantity = Math.max(1, item.quantity + delta);
             saveCart();
-            state.isCartOpen = true;
-            render();
-        },
-    
-        removeFromCart: (index) => {
-            state.cart.splice(index, 1);
-            saveCart();
-            render();
-        },
-    
-        updateQuantity: (index, delta) => {
-            const item = state.cart[index];
-            if (item) {
-                item.quantity = Math.max(1, item.quantity + delta);
-                saveCart();
-            }
-            render();
-        },
-    
-        // Checkout & Orders
-        confirmOrder: (e) => {
-            e.preventDefault();
-            const branch = e.target.branch.value;
-            if (!branch) return alert('Please select a branch');
-    
-            const total = state.cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
-            const orderId = `SS-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-    
-            const newOrder = {
-                id: orderId,
-                date: new Date().toISOString(),
-                total: total,
-                status: 'Order Placed',
-                branch: branch,
-                items: [...state.cart],
-                customer: state.user || { name: 'Guest', email: 'guest@example.com' }
-            };
-    
-            state.adminOrders.unshift(newOrder); // Add to beginning
-            saveOrders();
-    
-            // Clear Cart
-            state.cart = [];
-            saveCart();
-    
-            // Show success
-            state.checkoutModalOpen = false;
-            state.lastOrder = newOrder;
-    
-            // Show confirmation alert then go to tracking or home
-            setTimeout(() => {
-                alert(`Order Placed Successfully!\nOrder ID: ${orderId}\nPlease save this ID to track your order.`);
+        }
+        render();
+    },
+
+    // Checkout & Orders
+    confirmOrder: async (e) => {
+        e.preventDefault();
+
+        const branch = e.target.branch.value;
+        if (!branch) {
+            alert('Please select a branch');
+            return;
+        }
+
+        if (!state.cart || !state.cart.length) {
+            alert('Your cart is empty');
+            return;
+        }
+
+        const total = state.cart.reduce(
+            (sum, item) => sum + item.price * item.quantity,
+            0
+        );
+
+        const payload = {
+            branch,
+            items: state.cart,
+            customer: state.user || { name: 'Guest', email: 'guest@example.com' }
+        };
+
+        const res = await backend.createOrder(payload);
+
+        if (!res.success) {
+            alert(res.message || 'Failed to place order');
+            return;
+        }
+
+        const newOrder = res.order;
+
+        // Agar admin panel ke liye orders list rakhte ho:
+        if (!state.adminOrders) state.adminOrders = [];
+        state.adminOrders.unshift(newOrder);
+
+        // Cart clear
+        state.cart = [];
+        if (typeof saveCart === 'function') saveCart();
+
+        state.checkoutModalOpen = false;
+        state.lastOrder = newOrder;
+
+        if (typeof render === 'function') render();
+
+        setTimeout(() => {
+            alert(
+                `Order Placed Successfully!\n` +
+                `Order ID: ${newOrder.orderCode || newOrder.id}\n` +
+                `Please save this ID to track your order.`
+            );
+            if (app && typeof app.goToTracking === 'function') {
                 app.goToTracking();
-            }, 300);
-        },
-    
-        // Admin Actions
-        updateOrderStatus: (orderId, newStatus) => {
-            const order = state.adminOrders.find(o => o.id === orderId);
-            if (order) {
-                order.status = newStatus;
-                saveOrders();
-                render();
             }
-        },
-    
-        savePrice: (productId, newPrice) => {
-            const prod = PRODUCTS.find(p => p.id === parseInt(productId));
-            if (prod) {
-                prod.price = parseInt(newPrice);
-                prod.displayPrice = "₹" + parseInt(newPrice).toLocaleString();
-                saveProducts();
-                // Force re-render of admin panel to show feedback
-                render();
-            }
-        },
-    
-        // Product Details Logic
-        updateDetail: (key, value) => {
-            state.details[key] = value;
-            app.calculatePrice();
+        }, 300);
+    },
+
+    // Admin Actions
+    updateOrderStatus: (orderId, newStatus) => {
+        const order = state.adminOrders.find(o => o.id === orderId);
+        if (order) {
+            order.status = newStatus;
+            saveOrders();
             render();
-        },
-    
-        calculatePrice: () => {
-            const product = state.currentProduct;
-            if (!product) return;
-    
-            let finalPrice = product.price;
-            const { size, dimensions, measurement, height, customLength, customWidth } = state.details;
-    
-            const sizeMultipliers = { 'Single': 1.0, 'Double': 1.3, 'Queen': 1.5, 'King': 1.8 };
-            finalPrice *= (sizeMultipliers[size] || 1.0);
-    
-            let l, w;
-            if (dimensions === 'custom') {
-                l = parseFloat(customLength) || 72;
-                w = parseFloat(customWidth) || 30;
-            } else {
-                const parts = dimensions.split('x');
-                l = parseFloat(parts[0]) || 72;
-                w = parseFloat(parts[1]) || 30;
-            }
-    
-            if (measurement === 'Centimeter') { l /= 2.54; w /= 2.54; }
-            else if (measurement === 'Feet') { l *= 12; w *= 12; }
-    
-            const baseArea = 72 * 30;
-            const selectedArea = l * w;
-            finalPrice *= (selectedArea / baseArea);
-    
-            const h = parseFloat(height) || 4;
-            finalPrice += (h - 4) * 500;
-    
-            if (dimensions === 'custom') finalPrice += 500;
-    
-            state.details.currentPrice = Math.round(finalPrice);
-        },
-    
-        addToCartCurrent: () => {
-            const { size, dimensions, height, measurement, customLength, customWidth, currentPrice } = state.details;
-            app.addToCart({ ...state.currentProduct, price: currentPrice }, {
-                selectedSize: size,
-                selectedDimensions: dimensions === 'custom' ? `${customLength}x${customWidth}` : dimensions,
-                selectedHeight: height,
-                selectedMeasurement: measurement
-            });
-        },
-    };
+        }
+    },
 
-    // --- RENDER HELPERS ---
+    savePrice: (productId, newPrice) => {
+        const prod = PRODUCTS.find(p => p.id === parseInt(productId));
+        if (prod) {
+            prod.price = parseInt(newPrice);
+            prod.displayPrice = "₹" + parseInt(newPrice).toLocaleString();
+            saveProducts();
+            // Force re-render of admin panel to show feedback
+            render();
+        }
+    },
 
-    function renderHeader() {
-        const cartCount = state.cart.reduce((a, b) => a + b.quantity, 0);
+    // Product Details Logic
+    updateDetail: (key, value) => {
+        state.details[key] = value;
+        app.calculatePrice();
+        render();
+    },
 
-return `
+    calculatePrice: () => {
+        const product = state.currentProduct;
+        if (!product) return;
+
+        let finalPrice = product.price;
+        const { size, dimensions, measurement, height, customLength, customWidth } = state.details;
+
+        const sizeMultipliers = { 'Single': 1.0, 'Double': 1.3, 'Queen': 1.5, 'King': 1.8 };
+        finalPrice *= (sizeMultipliers[size] || 1.0);
+
+        let l, w;
+        if (dimensions === 'custom') {
+            l = parseFloat(customLength) || 72;
+            w = parseFloat(customWidth) || 30;
+        } else {
+            const parts = dimensions.split('x');
+            l = parseFloat(parts[0]) || 72;
+            w = parseFloat(parts[1]) || 30;
+        }
+
+        if (measurement === 'Centimeter') { l /= 2.54; w /= 2.54; }
+        else if (measurement === 'Feet') { l *= 12; w *= 12; }
+
+        const baseArea = 72 * 30;
+        const selectedArea = l * w;
+        finalPrice *= (selectedArea / baseArea);
+
+        const h = parseFloat(height) || 4;
+        finalPrice += (h - 4) * 500;
+
+        if (dimensions === 'custom') finalPrice += 500;
+
+        state.details.currentPrice = Math.round(finalPrice);
+    },
+
+    addToCartCurrent: () => {
+        const { size, dimensions, height, measurement, customLength, customWidth, currentPrice } = state.details;
+        app.addToCart({ ...state.currentProduct, price: currentPrice }, {
+            selectedSize: size,
+            selectedDimensions: dimensions === 'custom' ? `${customLength}x${customWidth}` : dimensions,
+            selectedHeight: height,
+            selectedMeasurement: measurement
+        });
+    },
+};
+
+// --- RENDER HELPERS ---
+
+function renderHeader() {
+    const cartCount = state.cart.reduce((a, b) => a + b.quantity, 0);
+
+    return `
     <header class="sticky top-0 z-50 bg-white shadow-sm font-sans">
         <!-- Top Bar -->
         <div class="border-b border-gray-100">
@@ -1355,11 +1410,11 @@ function renderAdminLogin() {
 function renderAdminDashboard() {
     const totalOrders = state.adminOrders.length;
     const totalSales = state.adminOrders.reduce((acc, order) => acc + order.total, 0);
-    const isSuper = state.adminUser && state.adminUser.role === 'super';
+    const isMain = state.adminUser && state.adminUser.isMain;
 
-    // Admin Approvals Logic
+    // Admin Approvals Logic: pending admins will be loaded via Firestore -> loadPendingAdmins
+    // FIREBASE: No longer using localStorage for pending admins - loaded via loadPendingAdmins()
     const allAdmins = JSON.parse(localStorage.getItem('sleepSoundAdmins') || '[]');
-    const pendingAdmins = allAdmins.filter(a => a.status === 'pending');
 
     // Calculate Branch Stats
     const branchStats = {};
@@ -1412,35 +1467,16 @@ function renderAdminDashboard() {
                     </div>
                 </div>
 
-                ${isSuper && pendingAdmins.length > 0 ? `
+                ${isMain ? `
                     <!-- Pending Admin Approvals -->
                     <div class="bg-white rounded-xl shadow-sm border border-red-200 overflow-hidden">
                         <div class="p-6 border-b border-red-100 bg-red-50">
                             <h3 class="font-bold text-lg text-red-900">Pending Admin Approvals</h3>
                             <p class="text-sm text-red-700">Action required: Approve or reject new admin requests.</p>
                         </div>
-                        <div class="overflow-x-auto">
-                            <table class="w-full text-left">
-                                <thead class="bg-gray-50 text-xs text-gray-500 uppercase">
-                                    <tr>
-                                        <th class="px-6 py-4">Username</th>
-                                        <th class="px-6 py-4">Request Date</th>
-                                        <th class="px-6 py-4">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="divide-y divide-gray-100 text-sm">
-                                    ${pendingAdmins.map(a => `
-                                        <tr>
-                                            <td class="px-6 py-4 font-bold text-gray-900">${a.username}</td>
-                                            <td class="px-6 py-4 text-gray-500">${new Date(a.id).toLocaleDateString()}</td>
-                                            <td class="px-6 py-4 flex gap-2">
-                                                <button onclick="app.approveAdmin(${a.id})" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700">Approve</button>
-                                                <button onclick="app.rejectAdmin(${a.id})" class="bg-red-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-red-700">Reject</button>
-                                            </td>
-                                        </tr>
-                                    `).join('')}
-                                </tbody>
-                            </table>
+                        <div id="pendingAdminsList" class="overflow-x-auto">
+                            <!-- Pending admins will be injected here by loadPendingAdmins() -->
+                            <div class="p-6 text-center text-gray-500 text-sm">Loading pending admin requests...</div>
                         </div>
                     </div>
                 ` : ''}
@@ -1463,11 +1499,11 @@ function renderAdminDashboard() {
                             </thead>
                             <tbody class="divide-y divide-gray-100 text-sm">
                                 ${allAdmins.map(admin => {
-                                    // Check if this admin is the MAIN admin
-                                    const isMain = admin.username === 'admin' || admin.isMain === true;
-                                    const isSelf = state.adminUser && state.adminUser.id === admin.id;
-                                    
-                                    return `
+        // Check if this admin is the MAIN admin
+        const isMain = admin.username === 'admin' || admin.isMain === true;
+        const isSelf = state.adminUser && state.adminUser.id === admin.id;
+
+        return `
                                         <tr>
                                             <td class="px-6 py-4 font-bold text-gray-900 flex items-center gap-2">
                                                 ${admin.username}
@@ -1481,14 +1517,14 @@ function renderAdminDashboard() {
                                                 </span>
                                             </td>
                                             <td class="px-6 py-4">
-                                                ${isMain ? 
-                                                    '<span class="text-gray-400 text-xs italic">Protected</span>' : 
-                                                    `<button onclick="app.removeAdmin(${admin.id})" class="text-red-600 hover:text-red-800 hover:bg-red-50 px-3 py-1.5 rounded transition-colors text-xs font-bold border border-red-200">Remove</button>`
-                                                }
+                                                ${isMain ?
+                '<span class="text-gray-400 text-xs italic">Protected</span>' :
+                `<button onclick="app.removeAdmin(${admin.id})" class="text-red-600 hover:text-red-800 hover:bg-red-50 px-3 py-1.5 rounded transition-colors text-xs font-bold border border-red-200">Remove</button>`
+            }
                                             </td>
                                         </tr>
                                     `;
-                                }).join('')}
+    }).join('')}
                             </tbody>
                         </table>
                     </div>
@@ -1807,6 +1843,13 @@ function render() {
 
     if (state.view === 'admin') {
         root.innerHTML = renderAdminDashboard();
+        // FIREBASE: Load pending admins if main admin
+        if (state.adminUser && state.adminUser.isMain) {
+            // Use setTimeout to ensure DOM is ready
+            setTimeout(() => {
+                loadPendingAdmins();
+            }, 100);
+        }
         return;
     }
 
@@ -1846,3 +1889,77 @@ window.PRODUCTS = PRODUCTS;
 
 // Start App
 initApp();
+document.getElementById("adminRequestForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+
+    const username = e.target.username.value.trim();
+    const password = e.target.password.value.trim();
+
+    const res = await backend.registerAdmin(username, password);
+
+    document.getElementById("requestMessage").innerText = res.message;
+});
+// =======================
+// MAIN ADMIN APPROVAL JS
+// =======================
+
+// FIREBASE: Load pending admins from Firestore
+async function loadPendingAdmins() {
+    const container = document.getElementById("pendingAdminsList");
+    if (!container) return;
+
+    const res = await backend.listPendingAdmins();
+    if (!res.success) {
+        container.innerHTML = '<p class="p-6 text-gray-500 text-sm">Failed to load pending admins.</p>';
+        return;
+    }
+
+    if (!res.admins || res.admins.length === 0) {
+        container.innerHTML = `
+            <div class="p-6 text-center text-gray-500 text-sm">
+                No pending admin requests.
+            </div>
+        `;
+        return;
+    }
+
+    // Render table structure with pending admins
+    container.innerHTML = `
+        <table class="w-full text-left">
+            <thead class="bg-gray-50 text-xs text-gray-500 uppercase">
+                <tr>
+                    <th class="px-6 py-4">Username</th>
+                    <th class="px-6 py-4">Request Date</th>
+                    <th class="px-6 py-4">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100 text-sm">
+                ${res.admins.map(a => {
+        const requestDate = a.createdAt ?
+            (a.createdAt.toDate ? a.createdAt.toDate().toLocaleDateString() : new Date(a.createdAt).toLocaleDateString()) :
+            'N/A';
+        return `
+                        <tr>
+                            <td class="px-6 py-4 font-bold text-gray-900">${a.username}</td>
+                            <td class="px-6 py-4 text-gray-500">${requestDate}</td>
+                            <td class="px-6 py-4 flex gap-2">
+                                <button onclick="app.approveAdmin('${a.id}')" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700">Approve</button>
+                                <button onclick="app.rejectAdmin('${a.id}')" class="bg-red-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-red-700">Reject</button>
+                            </td>
+                        </tr>
+                    `;
+    }).join('')}
+            </tbody>
+        </table>
+    `;
+}
+
+async function approveAdmin(id) {
+    await backend.updateAdminStatus(id, "approved");
+    loadPendingAdmins();
+}
+
+async function rejectAdmin(id) {
+    await backend.updateAdminStatus(id, "rejected");
+    loadPendingAdmins();
+}
