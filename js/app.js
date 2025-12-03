@@ -465,11 +465,25 @@ const app = {
 
         if (pass !== confirm) return alert("Passwords do not match");
 
-        const res = await backend.registerAdmin(username, pass);
-        if (!res.success) return alert(res.message || 'Failed to request admin access');
+        const submitBtn = e.target.querySelector('button[type="submit"]') || e.target.querySelector('button');
+        if (submitBtn) submitBtn.disabled = true;
 
-        alert(res.message);
+        const res = await backend.registerAdmin(username, pass);
+
+        if (!res || !res.success) {
+            alert(res && res.message ? res.message : 'Failed to request admin access');
+            if (submitBtn) submitBtn.disabled = false;
+            return;
+        }
+
+        alert(res.message || 'Request sent to main admin');
         state.adminAuthMode = 'login';
+
+        // Refresh pending requests and admin list
+        if (typeof loadPendingAdmins === 'function') await loadPendingAdmins();
+        if (typeof app.loadAdminsFromFirebase === 'function') await app.loadAdminsFromFirebase();
+
+        if (submitBtn) submitBtn.disabled = false;
         render();
     },
 
@@ -482,6 +496,30 @@ const app = {
             state.adminUsers = [];
         }
         if (typeof render === "function") render();
+    },
+
+    // Load orders from Firestore into state.adminOrders
+    loadOrdersFromFirebase: async function () {
+        try {
+            const snap = await firebase.firestore().collection('orders').get();
+            const orders = snap.docs.map(d => {
+                const data = d.data();
+                data.id = d.id;
+                return data;
+            });
+            state.adminOrders = orders;
+        } catch (err) {
+            console.error('Failed to load orders from Firebase', err);
+            state.adminOrders = state.adminOrders || [];
+        }
+        if (typeof render === 'function') render();
+    },
+
+    // Refresh all admin/dashboard data
+    refreshAllData: async function () {
+        if (app.loadAdminsFromFirebase) await app.loadAdminsFromFirebase();
+        if (app.loadOrdersFromFirebase) await app.loadOrdersFromFirebase();
+        if (typeof render === 'function') render();
     },
 
     // Admin Management Actions
@@ -1469,7 +1507,10 @@ function renderAdminDashboard() {
         <!-- Main Content -->
         <main class="flex-1 overflow-y-auto">
             <header class="bg-white border-b border-gray-200 p-6 flex justify-between items-center sticky top-0 z-20">
-                <h1 class="text-2xl font-bold text-gray-900">Dashboard Overview</h1>
+                <div class="flex items-center gap-3">
+                    <h1 class="text-2xl font-bold text-gray-900">Dashboard Overview</h1>
+                    <button type="button" onclick="app.refreshAllData()" class="text-sm bg-white border border-gray-200 px-3 py-1 rounded text-gray-700 hover:bg-gray-50">Refresh</button>
+                </div>
                 <div class="md:hidden">
                     <button onclick="app.logout()" class="text-sm text-red-500 font-bold">Logout</button>
                 </div>
@@ -1924,10 +1965,21 @@ document.getElementById("adminRequestForm").addEventListener("submit", async (e)
 
     const username = e.target.username.value.trim();
     const password = e.target.password.value.trim();
+    const submitBtn = e.target.querySelector('button[type="submit"]') || e.target.querySelector('button');
+    if (submitBtn) submitBtn.disabled = true;
 
     const res = await backend.registerAdmin(username, password);
 
-    document.getElementById("requestMessage").innerText = res.message;
+    if (!res || !res.success) {
+        document.getElementById("requestMessage").innerText = res && res.message ? res.message : 'Failed to request admin access';
+    } else {
+        document.getElementById("requestMessage").innerText = res.message || 'Request sent';
+        // Reload pending admins and admin list so UI updates
+        if (typeof loadPendingAdmins === 'function') await loadPendingAdmins();
+        if (typeof app.loadAdminsFromFirebase === 'function') await app.loadAdminsFromFirebase();
+    }
+
+    if (submitBtn) submitBtn.disabled = false;
 });
 // =======================
 // MAIN ADMIN APPROVAL JS

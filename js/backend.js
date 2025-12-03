@@ -99,25 +99,32 @@ const backend = {
 
   // 1) Second admin request from any device
   async registerAdmin(username, password) {
-    const snap = await db
-      .collection("admins")
-      .where("username", "==", username)
-      .get();
+    try {
+      // Use username as the document ID to prevent duplicate requests
+      const docRef = db.collection("admins").doc(username);
+      const snap = await docRef.get();
 
-    if (!snap.empty) {
-      return { success: false, message: "Username already taken" };
+      if (snap.exists) {
+        return {
+          success: false,
+          message: "This username has already requested admin access."
+        };
+      }
+
+      await docRef.set({
+        username,
+        password,
+        role: "admin",
+        status: "pending",
+        isMain: false,
+        createdAt: new Date().toISOString()
+      });
+
+      return { success: true, message: "Request sent to main admin for approval" };
+    } catch (err) {
+      console.error("Error registering admin:", err);
+      return { success: false, message: "Failed to request admin access" };
     }
-
-    await db.collection("admins").add({
-      username,
-      password,
-      role: "admin",
-      isMain: false,
-      status: "pending",
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
-
-    return { success: true, message: "Request sent to main admin for approval" };
   },
 
   // 2) Admin login (any device)
