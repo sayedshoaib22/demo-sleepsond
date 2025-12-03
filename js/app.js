@@ -73,6 +73,9 @@ function initApp() {
     // 4. Load admins from Firebase (replaces localStorage)
     app.loadAdminsFromFirebase();
 
+    // 5. Subscribe to products collection for realtime updates
+    if (typeof app.subscribeProductsRealtime === 'function') app.subscribeProductsRealtime();
+
     // 5. Initial Render
     render();
 }
@@ -522,6 +525,43 @@ const app = {
         if (typeof render === 'function') render();
     },
 
+    // Subscribe to products collection for realtime updates
+   subscribeProductsRealtime: function () {
+    try {
+        firebase.firestore().collection('products').onSnapshot(snapshot => {
+            const updatedProducts = [];
+
+            snapshot.forEach(doc => {
+                const d = doc.data();
+                const price = d.price;
+                const displayPrice =
+                    d.displayPrice || ("₹" + Number(price || 0).toLocaleString("en-IN"));
+
+                updatedProducts.push({
+                    id: doc.id,
+                    ...d,
+                    price,
+                    displayPrice
+                });
+            });
+
+            // Global PRODUCTS + state update
+            try { PRODUCTS = updatedProducts; } catch (e) {}
+            window.PRODUCTS = updatedProducts;
+            state.products = updatedProducts;
+
+            if (typeof renderProducts === 'function') {
+                try { renderProducts(state.products); } catch (e) { render(); }
+            } else if (typeof render === 'function') {
+                render();
+            }
+        });
+    } catch (err) {
+        console.error('Failed to subscribe to products realtime:', err);
+    }
+},
+
+
     // Admin Management Actions
     approveAdmin: async function (id) {
         // FIREBASE: Approve admin via backend and reload admin list
@@ -725,15 +765,64 @@ const app = {
     },
 
     savePrice: (productId, newPrice) => {
-        const prod = PRODUCTS.find(p => p.id === parseInt(productId));
-        if (prod) {
-            prod.price = parseInt(newPrice);
-            prod.displayPrice = "₹" + parseInt(newPrice).toLocaleString();
-            saveProducts();
-            // Force re-render of admin panel to show feedback
-            render();
-        }
-    },
+    // Sirf approved admin hi price change kar sake
+    if (!state.adminUser || state.adminUser.status !== 'approved') {
+        alert('Permission denied');
+        return;
+    }
+
+    const prodId = String(productId);
+    const priceNumber = parseInt(newPrice, 10);
+
+    if (isNaN(priceNumber) || priceNumber <= 0) {
+        alert('Invalid price');
+        return;
+    }
+
+    // Yeh hi text product card me dikhana hai
+    const displayPrice = "₹" + priceNumber.toLocaleString("en-IN");
+
+    // 1) Firestore me update – taaki har device pe same price aaye
+    firebase.firestore()
+        .collection('products')
+        .doc(prodId)
+        .set(
+            {
+                price: priceNumber,
+                displayPrice: displayPrice,
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            },
+            { merge: true }
+        )
+        .then(() => {
+            // 2) Local JS array (PRODUCTS + state.products) ko bhi update karo
+            const localProd = PRODUCTS.find(p => String(p.id) === prodId);
+            if (localProd) {
+                localProd.price = priceNumber;
+                localProd.displayPrice = displayPrice;
+            }
+
+            if (state.products && state.products.length) {
+                const idx = state.products.findIndex(p => String(p.id) === prodId);
+                if (idx !== -1) {
+                    state.products[idx].price = priceNumber;
+                    state.products[idx].displayPrice = displayPrice;
+                }
+            }
+
+            // Optional: localStorage cache update
+            try {
+                localStorage.setItem('sleepSoundProducts', JSON.stringify(PRODUCTS));
+            } catch (e) {}
+
+            if (typeof render === 'function') render();
+            alert('Price updated');
+        })
+        .catch(err => {
+            console.error('Failed to update price:', err);
+            alert('Failed to update price');
+        });
+},
 
     // Product Details Logic
     updateDetail: (key, value) => {
@@ -1509,7 +1598,11 @@ function renderAdminDashboard() {
             <header class="bg-white border-b border-gray-200 p-6 flex justify-between items-center sticky top-0 z-20">
                 <div class="flex items-center gap-3">
                     <h1 class="text-2xl font-bold text-gray-900">Dashboard Overview</h1>
-                    <button type="button" onclick="app.refreshAllData()" class="text-sm bg-white border border-gray-200 px-3 py-1 rounded text-gray-700 hover:bg-gray-50">Refresh</button>
+                    <button type="button" onclick="app.refreshAllData()" aria-label="Refresh data" title="Refresh" class="text-sm bg-white border border-gray-200 px-3 py-1 rounded text-gray-700 hover:bg-gray-50">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M20 7a9 9 0 11-2.1-5.9" />
+                        </svg>
+                    </button>
                 </div>
                 <div class="md:hidden">
                     <button onclick="app.logout()" class="text-sm text-red-500 font-bold">Logout</button>
