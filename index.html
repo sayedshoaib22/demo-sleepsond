@@ -2,37 +2,38 @@
 <html lang="en">
 
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sleep Sound - Sleep Solutions & Furniture</title>
-  <!-- Tailwind CSS -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <!-- Custom Styles -->
-  <link rel="stylesheet" href="styles.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sleep Sound - Sleep Solutions & Furniture</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Custom Styles -->
+    <link rel="stylesheet" href="styles.css">
 </head>
 
 <body class="bg-white min-h-screen text-gray-800 antialiased">
 
-  <div id="root"></div>
+    <div id="root"></div>
+    <div id="pendingAdminsList"></div>
 
 
-  <form id="adminRequestForm">
-    <input name="username" placeholder="New admin username">
-    <input name="password" type="password" placeholder="Password">
-    <button>Request Admin Access</button>
-  </form>
-  <div id="requestMessage"></div>
+    <form id="adminRequestForm">
+      <input name="username" placeholder="New admin username">
+      <input name="password" type="password" placeholder="Password">
+      <button>Request Admin Access</button>
+    </form>
+    <div id="requestMessage"></div>
+    
 
-
-  <!-- Scripts -->
+    <!-- Scripts -->
+    <!-- 1. Load Data and Constants -->
   <!-- 1. Load Data and Constants -->
-  <script src="js/data.js"></script>
-  <!-- Firebase (compat) and backend must load before the app -->
-  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
-  <script src="js/backend.js"></script>
-  <!-- 2. Load Application Logic -->
-  <script src="js/app.js"></script>
-</body>
+<script src="js/data.js"></script>
+<!-- 2. Load Application Logic -->
+<script src="js/app.js"></script>
 
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+<script src="js/backend.js"></script>
+</body>
 </html>

@@ -346,9 +346,8 @@ const DEFAULT_PRODUCTS = [
 ];
 
 // Load products from LocalStorage to allow Admin price updates, or use default
-const storedProducts = JSON.parse(localStorage.getItem('sleepSoundProducts') || 'null');
-// Firebase / realtime updates ke liye PRODUCTS ko reassign karna padega, isliye let
-let PRODUCTS = storedProducts || DEFAULT_PRODUCTS;
+let storedProducts = localStorage.getItem('sleepSoundProducts');
+const PRODUCTS = storedProducts ? JSON.parse(storedProducts) : DEFAULT_PRODUCTS;
 
 
 const SLIDES = [

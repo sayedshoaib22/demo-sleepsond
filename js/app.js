@@ -22,7 +22,8 @@ const state = {
     isAdminLoggedIn: false,
     adminUser: null, // Full admin object
     adminOrders: [],
-    adminUsers: [], // FIREBASE: List of all admin accounts
+    adminUsers: [], // FIREBASE: All admins loaded from Firestore
+    products: [], // FIREBASE: Products loaded from Firestore
 
     // Checkout State
     checkoutModalOpen: false,
@@ -70,14 +71,29 @@ function initApp() {
         localStorage.setItem('sleepSoundUsers', JSON.stringify([]));
     }
 
-    // 4. Load admins from Firebase (replaces localStorage)
-    app.loadAdminsFromFirebase();
-
-    // 5. Subscribe to products collection for realtime updates
-    if (typeof app.subscribeProductsRealtime === 'function') app.subscribeProductsRealtime();
+    // 4. Initialize Admins - FIREBASE: Load from Firestore instead of localStorage
+    // Note: Main admin should already exist in Firestore
+    state.adminUsers = [];
 
     // 5. Initial Render
     render();
+
+    // 6. Load admins from Firestore after initial render
+    if (window.backend && typeof app.loadAdminsFromFirebase === 'function') {
+        app.loadAdminsFromFirebase();
+    }
+
+    // 7. FIREBASE: Initialize products from Firestore and set up real-time listener
+    if (window.backend && window.firebase) {
+        initializeProductsFromFirestore();
+        // Also use the new functions
+        if (app.loadProductsFromFirebase) {
+            app.loadProductsFromFirebase();
+        }
+        if (app.startProductListener) {
+            app.startProductListener();
+        }
+    }
 }
 
 function saveCart() {
@@ -156,8 +172,56 @@ const app = {
         window.scrollTo({ top: 0, behavior: 'smooth' });
         render();
     },
+    selectProductById: (productId) => {
+        // Find product from latest data source (Firestore first, then PRODUCTS)
+        // Handle both string and number IDs - Firestore uses string IDs
+        // Normalize both IDs to strings for comparison
+        const normalizedId = String(productId);
+
+        // Try Firestore products first
+        let product = null;
+        if (state.products && state.products.length > 0) {
+            product = state.products.find(p => String(p.id) === normalizedId);
+        }
+
+        // Fallback to PRODUCTS array if not found in Firestore
+        if (!product && PRODUCTS && PRODUCTS.length > 0) {
+            product = PRODUCTS.find(p => String(p.id) === normalizedId);
+        }
+
+        if (product) {
+            app.selectProduct(product);
+        } else {
+            const allProducts = state.products && state.products.length > 0 ? state.products : PRODUCTS;
+            console.error('Product not found with ID:', productId, 'Type:', typeof productId, 'Normalized:', normalizedId,
+                'Available Firestore products:', state.products ? state.products.map(p => String(p.id)) : 'none',
+                'Available PRODUCTS:', PRODUCTS ? PRODUCTS.map(p => String(p.id)) : 'none');
+        }
+    },
+
     selectProduct: (product) => {
-        state.currentProduct = product;
+        // Merge with latest Firestore data if available to get updated price
+        let latestProduct = product;
+        if (state.products && state.products.length > 0) {
+            // Handle both string and number IDs when finding Firestore product
+            const firestoreProduct = state.products.find(p => {
+                return String(p.id) === String(product.id) || p.id === product.id || p.id === parseInt(product.id);
+            });
+            if (firestoreProduct) {
+                // Merge Firestore data (especially price) with existing product data
+                latestProduct = {
+                    ...product,
+                    ...firestoreProduct,
+                    // Preserve all product properties (images, features, etc.)
+                    images: firestoreProduct.images || product.images || [product.image],
+                    features: firestoreProduct.features || product.features || [],
+                    description: firestoreProduct.description || product.description,
+                    displayPrice: firestoreProduct.displayPrice || `₹${firestoreProduct.price.toLocaleString()}`
+                };
+            }
+        }
+
+        state.currentProduct = latestProduct;
         state.view = 'home';
         state.details = {
             size: 'Single',
@@ -167,9 +231,11 @@ const app = {
             customLength: '72',
             customWidth: '30',
             zoom: false,
-            currentPrice: product.price,
-            currentImage: product.image
+            currentPrice: latestProduct.price,
+            currentImage: latestProduct.image
         };
+        // Calculate price based on selected options
+        app.calculatePrice();
         window.scrollTo({ top: 0, behavior: 'smooth' });
         render();
     },
@@ -450,6 +516,10 @@ const app = {
 
         state.adminUser = res.admin;
         state.isAdminLoggedIn = true; // FIREBASE: mark admin as logged in
+
+        // FIREBASE: Load all admins from Firestore after login
+        await app.loadAdminsFromFirebase();
+
         // After login, go to admin dashboard
         app.goToAdmin();
 
@@ -462,35 +532,61 @@ const app = {
     registerAdmin: async (e) => {
         // FIREBASE: register admin via backend instead of localStorage
         e.preventDefault();
-        const username = e.target.username.value.trim();
-        const pass = e.target.password.value.trim();
-        const confirm = e.target.confirmPassword && e.target.confirmPassword.value.trim();
+        const form = e.target;
+        const submitBtn = form.querySelector('button[type="submit"]');
+        const username = form.username.value.trim();
+        const pass = form.password.value.trim();
+        const confirm = form.confirmPassword && form.confirmPassword.value.trim();
 
-        if (pass !== confirm) return alert("Passwords do not match");
-
-        const submitBtn = e.target.querySelector('button[type="submit"]') || e.target.querySelector('button');
-        if (submitBtn) submitBtn.disabled = true;
-
-        const res = await backend.registerAdmin(username, pass);
-
-        if (!res || !res.success) {
-            alert(res && res.message ? res.message : 'Failed to request admin access');
-            if (submitBtn) submitBtn.disabled = false;
+        if (pass !== confirm) {
+            alert("Passwords do not match");
             return;
         }
 
-        alert(res.message || 'Request sent to main admin');
-        state.adminAuthMode = 'login';
+        // Disable submit button to prevent double submissions
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Submitting...';
+        }
 
-        // Refresh pending requests and admin list
-        if (typeof loadPendingAdmins === 'function') await loadPendingAdmins();
-        if (typeof app.loadAdminsFromFirebase === 'function') await app.loadAdminsFromFirebase();
+        try {
+            const res = await backend.registerAdmin(username, pass);
 
-        if (submitBtn) submitBtn.disabled = false;
-        render();
+            if (!res.success) {
+                alert(res.message || 'Failed to request admin access');
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Submit Request';
+                }
+                return;
+            }
+
+            // Success - show message and reload pending admins if main admin is viewing
+            alert(res.message);
+            state.adminAuthMode = 'login';
+
+            // Reload admins from Firestore after successful registration
+            if (app.loadAdminsFromFirebase) {
+                await app.loadAdminsFromFirebase();
+            }
+
+            // Reload pending admins if main admin is logged in
+            if (state.adminUser && state.adminUser.isMain && typeof loadPendingAdmins === 'function') {
+                await loadPendingAdmins();
+            }
+
+            render();
+        } catch (error) {
+            alert('An error occurred. Please try again.');
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Submit Request';
+            }
+        }
     },
 
-    // FIREBASE: Load all admin accounts from Firestore
+    // Admin Management Actions
+    // FIREBASE: Load all admins from Firestore
     loadAdminsFromFirebase: async function () {
         const res = await backend.getAdmins();
         if (res.success) {
@@ -501,132 +597,193 @@ const app = {
         if (typeof render === "function") render();
     },
 
-    // Load orders from Firestore into state.adminOrders
+    // FIREBASE: Load all orders from Firestore
     loadOrdersFromFirebase: async function () {
-        try {
-            const snap = await firebase.firestore().collection('orders').get();
-            const orders = snap.docs.map(d => {
-                const data = d.data();
-                data.id = d.id;
-                return data;
-            });
-            state.adminOrders = orders;
-        } catch (err) {
-            console.error('Failed to load orders from Firebase', err);
-            state.adminOrders = state.adminOrders || [];
+        const res = await backend.getOrders();
+        if (res.success) {
+            state.adminOrders = res.orders;
+            // Also save to localStorage for backward compatibility
+            if (typeof saveOrders === 'function') {
+                saveOrders();
+            }
+        } else {
+            state.adminOrders = [];
         }
-        if (typeof render === 'function') render();
+        if (typeof render === "function") render();
     },
 
-    // Refresh all admin/dashboard data
-    refreshAllData: async function () {
-        if (app.loadAdminsFromFirebase) await app.loadAdminsFromFirebase();
-        if (app.loadOrdersFromFirebase) await app.loadOrdersFromFirebase();
-        if (typeof render === 'function') render();
-    },
-
-    // Subscribe to products collection for realtime updates
-   subscribeProductsRealtime: function () {
-    try {
-        firebase.firestore().collection('products').onSnapshot(snapshot => {
-            const updatedProducts = [];
-
-            snapshot.forEach(doc => {
-                const d = doc.data();
-                const price = d.price;
-                const displayPrice =
-                    d.displayPrice || ("₹" + Number(price || 0).toLocaleString("en-IN"));
-
-                updatedProducts.push({
-                    id: doc.id,
-                    ...d,
-                    price,
-                    displayPrice
+    // FIREBASE: Load all products from Firestore
+    loadProductsFromFirebase: async function () {
+        const res = await backend.getProducts();
+        if (res.success) {
+            state.products = res.products;
+            // Also update PRODUCTS array for backward compatibility
+            if (res.products && res.products.length > 0) {
+                res.products.forEach(firestoreProduct => {
+                    const existingIndex = PRODUCTS.findIndex(p => p.id === firestoreProduct.id);
+                    if (existingIndex >= 0) {
+                        PRODUCTS[existingIndex] = {
+                            ...PRODUCTS[existingIndex],
+                            ...firestoreProduct,
+                            displayPrice: firestoreProduct.displayPrice || `₹${firestoreProduct.price.toLocaleString()}`
+                        };
+                    } else {
+                        PRODUCTS.push({
+                            ...firestoreProduct,
+                            displayPrice: firestoreProduct.displayPrice || `₹${firestoreProduct.price.toLocaleString()}`
+                        });
+                    }
                 });
-            });
+                window.PRODUCTS = PRODUCTS;
+            }
+        } else {
+            state.products = [];
+        }
+        if (typeof render === "function") render();
+    },
 
-            // Global PRODUCTS + state update
-            try { PRODUCTS = updatedProducts; } catch (e) {}
-            window.PRODUCTS = updatedProducts;
-            state.products = updatedProducts;
+    // FIREBASE: Start real-time listener for products
+    startProductListener: function () {
+        if (!backend.listenToProducts) return;
 
-            if (typeof renderProducts === 'function') {
-                try { renderProducts(state.products); } catch (e) { render(); }
-            } else if (typeof render === 'function') {
-                render();
+        // Unsubscribe existing listener if any
+        if (productsListenerUnsubscribe) {
+            productsListenerUnsubscribe();
+        }
+
+        productsListenerUnsubscribe = backend.listenToProducts((products) => {
+            state.products = products;
+            // Also update PRODUCTS array for backward compatibility
+            if (products && products.length > 0) {
+                products.forEach(firestoreProduct => {
+                    // Handle both string and number IDs when finding existing product
+                    const existingIndex = PRODUCTS.findIndex(p => {
+                        return String(p.id) === String(firestoreProduct.id) || p.id === firestoreProduct.id || p.id === parseInt(firestoreProduct.id);
+                    });
+                    if (existingIndex >= 0) {
+                        PRODUCTS[existingIndex] = {
+                            ...PRODUCTS[existingIndex],
+                            ...firestoreProduct,
+                            displayPrice: firestoreProduct.displayPrice || `₹${firestoreProduct.price.toLocaleString()}`
+                        };
+                    } else {
+                        PRODUCTS.push({
+                            ...firestoreProduct,
+                            displayPrice: firestoreProduct.displayPrice || `₹${firestoreProduct.price.toLocaleString()}`
+                        });
+                    }
+                });
+                window.PRODUCTS = PRODUCTS;
+
+                // If a product is currently being viewed, update it with latest Firestore data
+                if (state.currentProduct) {
+                    // Handle both string and number IDs when finding updated product
+                    const updatedProduct = products.find(p => {
+                        return String(p.id) === String(state.currentProduct.id) || p.id === state.currentProduct.id || p.id === parseInt(state.currentProduct.id);
+                    });
+                    if (updatedProduct) {
+                        // Merge Firestore updates with current product (preserve selected options state)
+                        state.currentProduct = {
+                            ...state.currentProduct,
+                            ...updatedProduct,
+                            // Preserve all product properties
+                            images: updatedProduct.images || state.currentProduct.images || [state.currentProduct.image],
+                            features: updatedProduct.features || state.currentProduct.features || [],
+                            description: updatedProduct.description || state.currentProduct.description,
+                            displayPrice: updatedProduct.displayPrice || `₹${updatedProduct.price.toLocaleString()}`
+                        };
+                        // Recalculate price with updated base price
+                        app.calculatePrice();
+                    }
+                }
+
+                // Re-render the UI to show updated prices everywhere
+                if (typeof render === "function") {
+                    render();
+                }
             }
         });
-    } catch (err) {
-        console.error('Failed to subscribe to products realtime:', err);
-    }
-},
+    },
 
+    // FIREBASE: Refresh all data from Firestore
+    refreshAllData: async function () {
+        if (app.loadAdminsFromFirebase) {
+            await app.loadAdminsFromFirebase();
+        }
 
-    // Admin Management Actions
+        if (app.loadOrdersFromFirebase) {
+            await app.loadOrdersFromFirebase();
+        }
+
+        if (app.loadProductsFromFirebase) {
+            await app.loadProductsFromFirebase();
+        }
+
+        // Reload pending admins if main admin
+        if (state.adminUser && state.adminUser.isMain && typeof loadPendingAdmins === 'function') {
+            await loadPendingAdmins();
+        }
+
+        if (typeof render === "function") {
+            render();
+        }
+    },
+
     approveAdmin: async function (id) {
-        // FIREBASE: Approve admin via backend and reload admin list
         const ok = confirm("Approve this admin?");
         if (!ok) return;
 
-        const res = await backend.updateAdminStatus(id, 'approved');
+        const res = await backend.updateAdminStatus(id, "approved");
         if (!res.success) {
-            alert(res.message || 'Failed to approve admin');
+            alert(res.message || "Failed to update status");
             return;
         }
 
-        // Reload admin list from Firebase
+        // Refresh both pending list and full admin list
+        await loadPendingAdmins();
         await app.loadAdminsFromFirebase();
     },
 
     rejectAdmin: async function (id) {
-        // FIREBASE: Reject admin via backend and reload admin list
         const ok = confirm("Reject this admin?");
         if (!ok) return;
 
-        const res = await backend.updateAdminStatus(id, 'rejected');
+        const res = await backend.updateAdminStatus(id, "rejected");
         if (!res.success) {
-            alert(res.message || 'Failed to reject admin');
+            alert(res.message || "Failed to update status");
             return;
         }
 
-        // Reload admin list from Firebase
+        // Refresh both pending list and full admin list
+        await loadPendingAdmins();
         await app.loadAdminsFromFirebase();
     },
 
-    removeAdmin: async (id) => {
+    removeAdmin: (id) => {
         if (!confirm("Are you sure you want to permanently remove this admin account?")) return;
 
-        // Security: Only approved admins can remove others
-        if (!state.adminUser || state.adminUser.status !== 'approved') {
-            alert("Only approved admins can remove accounts.");
-            return;
-        }
-
+        // FIREBASE: Get admin from Firestore state instead of localStorage
         const adminToDelete = state.adminUsers.find(a => a.id === id);
 
         if (!adminToDelete) return;
 
-        // Security check: Main Admin must always remain protected
+        // Security check for Main Admin
         if (adminToDelete.username === 'admin' || adminToDelete.isMain) {
             alert("Security Alert: The Main Admin account cannot be removed.");
             return;
         }
 
-        // Prevent self-removal
-        if (state.adminUser.id === id) {
-            alert("You cannot remove your own account.");
-            return;
-        }
+        // FIREBASE: Note - Remove admin functionality would need Firestore delete operation
+        // For now, just show a message that this requires Firestore delete
+        alert("Admin removal requires Firestore delete operation. This feature can be implemented if needed.");
 
-        // Remove from Firestore
-        try {
-            await firebase.firestore().collection("admins").doc(id).delete();
-
-            // Reload admin list from Firebase
-            await app.loadAdminsFromFirebase();
-        } catch (err) {
-            console.error("Error removing admin:", err);
-            alert("Failed to remove admin account");
+        // If user deletes themselves (edge case if we allow it)
+        if (state.adminUser && state.adminUser.id === id) {
+            alert("You have removed your own account. Logging out.");
+            app.logout();
+        } else {
+            // Refresh admin list from Firestore
+            app.loadAdminsFromFirebase();
         }
     },
 
@@ -764,65 +921,51 @@ const app = {
         }
     },
 
-    savePrice: (productId, newPrice) => {
-    // Sirf approved admin hi price change kar sake
-    if (!state.adminUser || state.adminUser.status !== 'approved') {
-        alert('Permission denied');
-        return;
-    }
+    savePrice: async (productId, newPrice) => {
+        // FIREBASE: Permission check - only approved admins or main admin can change prices
+        if (!state.adminUser) {
+            alert("Permission denied. Please log in as an admin.");
+            return;
+        }
 
-    const prodId = String(productId);
-    const priceNumber = parseInt(newPrice, 10);
+        // Allow if main admin OR approved admin
+        const isMainAdmin = state.adminUser.isMain === true;
+        const isApprovedAdmin = state.adminUser.status === "approved";
 
-    if (isNaN(priceNumber) || priceNumber <= 0) {
-        alert('Invalid price');
-        return;
-    }
+        if (!isMainAdmin && !isApprovedAdmin) {
+            alert("Permission denied. Only approved admins can change product prices.");
+            return;
+        }
 
-    // Yeh hi text product card me dikhana hai
-    const displayPrice = "₹" + priceNumber.toLocaleString("en-IN");
+        const newPriceNum = parseInt(newPrice);
+        if (isNaN(newPriceNum) || newPriceNum <= 0) {
+            alert("Please enter a valid price.");
+            return;
+        }
 
-    // 1) Firestore me update – taaki har device pe same price aaye
-    firebase.firestore()
-        .collection('products')
-        .doc(prodId)
-        .set(
-            {
-                price: priceNumber,
-                displayPrice: displayPrice,
-                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-            },
-            { merge: true }
-        )
-        .then(() => {
-            // 2) Local JS array (PRODUCTS + state.products) ko bhi update karo
-            const localProd = PRODUCTS.find(p => String(p.id) === prodId);
-            if (localProd) {
-                localProd.price = priceNumber;
-                localProd.displayPrice = displayPrice;
-            }
+        // FIREBASE: Update price in Firestore (real-time listener will update UI)
+        const res = await backend.updateProductPrice(productId, newPriceNum);
 
-            if (state.products && state.products.length) {
-                const idx = state.products.findIndex(p => String(p.id) === prodId);
-                if (idx !== -1) {
-                    state.products[idx].price = priceNumber;
-                    state.products[idx].displayPrice = displayPrice;
-                }
-            }
+        if (!res.success) {
+            alert(res.message || "Failed to update product price. Please try again.");
+            return;
+        }
 
-            // Optional: localStorage cache update
-            try {
-                localStorage.setItem('sleepSoundProducts', JSON.stringify(PRODUCTS));
-            } catch (e) {}
+        // Update local state immediately for instant feedback
+        const prod = PRODUCTS.find(p => p.id === parseInt(productId));
+        if (prod) {
+            prod.price = newPriceNum;
+            prod.displayPrice = "₹" + newPriceNum.toLocaleString();
+            // Note: Don't save to localStorage - Firestore is the source of truth
+            // The real-time listener will sync to all devices
+        }
 
-            if (typeof render === 'function') render();
-            alert('Price updated');
-        })
-        .catch(err => {
-            console.error('Failed to update price:', err);
-            alert('Failed to update price');
-        });
-},
+        // Show success message
+        alert("Price updated successfully!");
+
+        // Force re-render of admin panel to show feedback
+        render();
+    },
 
     // Product Details Logic
     updateDetail: (key, value) => {
@@ -835,12 +978,28 @@ const app = {
         const product = state.currentProduct;
         if (!product) return;
 
-        let finalPrice = product.price;
+        // Get the latest base price from Firestore if available, otherwise use current product price
+        let basePrice = product.price;
+        if (state.products && state.products.length > 0) {
+            // Handle both string and number IDs when finding Firestore product
+            const firestoreProduct = state.products.find(p => {
+                return String(p.id) === String(product.id) || p.id === product.id || p.id === parseInt(product.id);
+            });
+            if (firestoreProduct && firestoreProduct.price) {
+                basePrice = firestoreProduct.price;
+                // Also update currentProduct with latest price for consistency
+                state.currentProduct.price = basePrice;
+            }
+        }
+
+        let finalPrice = basePrice;
         const { size, dimensions, measurement, height, customLength, customWidth } = state.details;
 
+        // Size category multiplier
         const sizeMultipliers = { 'Single': 1.0, 'Double': 1.3, 'Queen': 1.5, 'King': 1.8 };
         finalPrice *= (sizeMultipliers[size] || 1.0);
 
+        // Dimension calculation (convert to inches for area calculation)
         let l, w;
         if (dimensions === 'custom') {
             l = parseFloat(customLength) || 72;
@@ -851,28 +1010,53 @@ const app = {
             w = parseFloat(parts[1]) || 30;
         }
 
-        if (measurement === 'Centimeter') { l /= 2.54; w /= 2.54; }
-        else if (measurement === 'Feet') { l *= 12; w *= 12; }
+        // Convert to inches for area calculation
+        if (measurement === 'Centimeter') {
+            l /= 2.54;
+            w /= 2.54;
+        } else if (measurement === 'Feet') {
+            l *= 12;
+            w *= 12;
+        }
 
+        // Area-based pricing (proportional to base area 72x30)
         const baseArea = 72 * 30;
         const selectedArea = l * w;
         finalPrice *= (selectedArea / baseArea);
 
+        // Thickness adjustment (extra cost for thicker mattresses)
         const h = parseFloat(height) || 4;
         finalPrice += (h - 4) * 500;
 
+        // Custom dimension surcharge
         if (dimensions === 'custom') finalPrice += 500;
 
         state.details.currentPrice = Math.round(finalPrice);
     },
 
+    addToCartById: (productId) => {
+        // Find product from latest data source (Firestore first, then PRODUCTS)
+        // Handle both string and number IDs - Firestore uses string IDs
+        const products = state.products && state.products.length > 0 ? state.products : PRODUCTS;
+        // Normalize both IDs to strings for comparison
+        const normalizedId = String(productId);
+        const product = products.find(p => String(p.id) === normalizedId);
+        if (product) {
+            app.addToCart(product);
+        } else {
+            console.error('Product not found with ID:', productId, 'Type:', typeof productId, 'Normalized:', normalizedId);
+        }
+    },
+
     addToCartCurrent: () => {
         const { size, dimensions, height, measurement, customLength, customWidth, currentPrice } = state.details;
+        // Ensure we use the calculated final price and all selected options
         app.addToCart({ ...state.currentProduct, price: currentPrice }, {
             selectedSize: size,
             selectedDimensions: dimensions === 'custom' ? `${customLength}x${customWidth}` : dimensions,
             selectedHeight: height,
-            selectedMeasurement: measurement
+            selectedMeasurement: measurement,
+            price: currentPrice  // Explicitly pass the calculated price
         });
     },
 };
@@ -1087,7 +1271,10 @@ function renderProductList() {
     const currentNav = NAV_ITEMS.find(n => n.category === state.selectedCategory);
     const searchLower = state.searchQuery.toLowerCase();
 
-    const filteredProducts = PRODUCTS.filter(p => {
+    // Prefer Firestore products, fallback to PRODUCTS
+    const products = state.products && state.products.length > 0 ? state.products : PRODUCTS;
+
+    const filteredProducts = products.filter(p => {
         if (searchLower) {
             const matchName = p.name.toLowerCase().includes(searchLower);
             const matchCat = p.category.toLowerCase().includes(searchLower);
@@ -1162,13 +1349,13 @@ function renderProductList() {
                             ${filteredProducts.map(product => {
         const discount = product.originalPrice ? Math.round((1 - product.price / parseInt(product.originalPrice.replace(/[₹,]/g, ''))) * 100) : 0;
         return `
-                                <div class="group bg-white rounded-2xl overflow-hidden border border-gray-100 hover:shadow-xl transition-all duration-300 cursor-pointer flex flex-col h-full transform hover:-translate-y-1" onclick="app.selectProduct(PRODUCTS.find(p => p.id === ${product.id}))">
+                                <div class="group bg-white rounded-2xl overflow-hidden border border-gray-100 hover:shadow-xl transition-all duration-300 cursor-pointer flex flex-col h-full transform hover:-translate-y-1" onclick="app.selectProductById(${product.id})">
                                     <div class="relative aspect-[4/3] bg-gray-100 overflow-hidden">
                                         <img src="${product.image}" alt="${product.name}" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" loading="lazy" />
                                         ${product.badge ? `<div class="absolute top-3 left-3 bg-[#FF6B35] text-white px-3 py-1 rounded-full text-xs font-bold z-10 shadow-sm">${product.badge}</div>` : ''}
                                         
                                         <div class="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/60 to-transparent translate-y-full group-hover:translate-y-0 transition-transform duration-300 flex justify-center">
-                                            <button onclick="event.stopPropagation(); app.addToCart(PRODUCTS.find(p => p.id === ${product.id}))" class="bg-white text-gray-900 font-bold py-2 px-6 rounded-full hover:bg-[#FF6B35] hover:text-white transition-colors shadow-lg text-sm">
+                                            <button onclick="event.stopPropagation(); app.addToCartById(${product.id})" class="bg-white text-gray-900 font-bold py-2 px-6 rounded-full hover:bg-[#FF6B35] hover:text-white transition-colors shadow-lg text-sm">
                                                 Add to Cart
                                             </button>
                                         </div>
@@ -1199,12 +1386,17 @@ function renderProductList() {
 
 function renderProductDetails() {
     const product = state.currentProduct;
+    if (!product) {
+        return '<section class="bg-white py-8 md:py-12"><div class="max-w-7xl mx-auto px-4 md:px-6"><p>Product not found</p></div></section>';
+    }
     const details = state.details;
     const currentImage = details.currentImage || product.image;
     const originalPriceNum = product.originalPrice ? parseInt(product.originalPrice.replace(/[₹,]/g, '')) : 0;
-    const currentPrice = details.currentPrice;
-    const savings = Math.max(0, (originalPriceNum * (currentPrice / product.price)) - currentPrice);
-    const scaledOriginalPrice = originalPriceNum ? Math.round(originalPriceNum * (currentPrice / product.price)) : 0;
+    // Ensure currentPrice is calculated if not set
+    const currentPrice = details.currentPrice || product.price || 0;
+    const basePrice = product.price || 1; // Avoid division by zero
+    const savings = Math.max(0, (originalPriceNum * (currentPrice / basePrice)) - currentPrice);
+    const scaledOriginalPrice = originalPriceNum ? Math.round(originalPriceNum * (currentPrice / basePrice)) : 0;
     const discount = scaledOriginalPrice ? Math.round((1 - currentPrice / scaledOriginalPrice) * 100) : 0;
     const galleryImages = product.images && product.images.length > 0 ? product.images : [product.image];
 
@@ -1565,7 +1757,8 @@ function renderAdminDashboard() {
     const totalSales = state.adminOrders.reduce((acc, order) => acc + order.total, 0);
     const isMain = state.adminUser && state.adminUser.isMain;
 
-    // FIREBASE: Use state.adminUsers from Firestore instead of localStorage
+    // Admin Approvals Logic: pending admins will be loaded via Firestore -> loadPendingAdmins
+    // FIREBASE: Load admins from Firestore state instead of localStorage
     const allAdmins = state.adminUsers || [];
 
     // Calculate Branch Stats
@@ -1596,12 +1789,10 @@ function renderAdminDashboard() {
         <!-- Main Content -->
         <main class="flex-1 overflow-y-auto">
             <header class="bg-white border-b border-gray-200 p-6 flex justify-between items-center sticky top-0 z-20">
-                <div class="flex items-center gap-3">
+                <div class="flex items-center gap-4">
                     <h1 class="text-2xl font-bold text-gray-900">Dashboard Overview</h1>
-                    <button type="button" onclick="app.refreshAllData()" aria-label="Refresh data" title="Refresh" class="text-sm bg-white border border-gray-200 px-3 py-1 rounded text-gray-700 hover:bg-gray-50">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M20 7a9 9 0 11-2.1-5.9" />
-                        </svg>
+                    <button type="button" onclick="app.refreshAllData()" class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-colors">
+                        Refresh
                     </button>
                 </div>
                 <div class="md:hidden">
@@ -1661,9 +1852,6 @@ function renderAdminDashboard() {
         // Check if this admin is the MAIN admin
         const isMain = admin.username === 'admin' || admin.isMain === true;
         const isSelf = state.adminUser && state.adminUser.id === admin.id;
-        // Check if current logged-in admin is approved and can remove others
-        const currentAdminApproved = state.adminUser && state.adminUser.status === 'approved';
-        const canRemove = !isMain && currentAdminApproved && !isSelf;
 
         return `
                                         <tr>
@@ -1681,9 +1869,7 @@ function renderAdminDashboard() {
                                             <td class="px-6 py-4">
                                                 ${isMain ?
                 '<span class="text-gray-400 text-xs italic">Protected</span>' :
-                canRemove ?
-                    `<button onclick="app.removeAdmin('${admin.id}')" class="text-red-600 hover:text-red-800 hover:bg-red-50 px-3 py-1.5 rounded transition-colors text-xs font-bold border border-red-200">Remove</button>` :
-                    '<span class="text-gray-400 text-xs italic">N/A</span>'
+                `<button onclick="app.removeAdmin(${admin.id})" class="text-red-600 hover:text-red-800 hover:bg-red-50 px-3 py-1.5 rounded transition-colors text-xs font-bold border border-red-200">Remove</button>`
             }
                                             </td>
                                         </tr>
@@ -2007,7 +2193,10 @@ function render() {
 
     if (state.view === 'admin') {
         root.innerHTML = renderAdminDashboard();
-        // FIREBASE: Load pending admins if main admin
+        // FIREBASE: Ensure admins are loaded and load pending admins if main admin
+        if (state.adminUsers.length === 0 && window.backend) {
+            app.loadAdminsFromFirebase();
+        }
         if (state.adminUser && state.adminUser.isMain) {
             // Use setTimeout to ensure DOM is ready
             setTimeout(() => {
@@ -2047,6 +2236,151 @@ function render() {
     `;
 }
 
+// FIREBASE: Real-time product price listener
+let productsListenerUnsubscribe = null;
+
+// Initialize products from Firestore on first load
+async function initializeProductsFromFirestore() {
+    if (!window.backend) return;
+
+    try {
+        // Try to load products from Firestore
+        const res = await backend.getProducts();
+
+        if (res.success && res.products && res.products.length > 0) {
+            // Firestore has products - use them
+            res.products.forEach(firestoreProduct => {
+                const existingIndex = PRODUCTS.findIndex(p => p.id === firestoreProduct.id);
+                if (existingIndex >= 0) {
+                    // Update existing product with Firestore data (price from Firestore)
+                    PRODUCTS[existingIndex] = {
+                        ...PRODUCTS[existingIndex],
+                        ...firestoreProduct,
+                        displayPrice: firestoreProduct.displayPrice || `₹${firestoreProduct.price.toLocaleString()}`
+                    };
+                } else {
+                    // Add new product from Firestore
+                    PRODUCTS.push({
+                        ...firestoreProduct,
+                        displayPrice: firestoreProduct.displayPrice || `₹${firestoreProduct.price.toLocaleString()}`
+                    });
+                }
+            });
+
+            // Update window.PRODUCTS reference
+            window.PRODUCTS = PRODUCTS;
+
+            // Re-render with Firestore data
+            if (typeof render === "function") {
+                render();
+            }
+        } else {
+            // Firestore is empty - sync existing PRODUCTS to Firestore (one-time migration)
+            // Use current PRODUCTS array which may come from localStorage or DEFAULT_PRODUCTS
+            if (PRODUCTS && PRODUCTS.length > 0) {
+                await backend.syncProductsToFirestore(PRODUCTS);
+                console.log("Products synced to Firestore");
+            }
+        }
+    } catch (error) {
+        console.error("Error initializing products from Firestore:", error);
+        // Continue with existing PRODUCTS array as fallback
+    }
+
+    // Set up real-time listener after initialization
+    setupRealtimeProductListener();
+}
+
+function setupRealtimeProductListener() {
+    if (!window.firebase || !window.backend) return;
+
+    const db = firebase.firestore();
+
+    // Unsubscribe existing listener if any
+    if (productsListenerUnsubscribe) {
+        productsListenerUnsubscribe();
+    }
+
+    // Set up real-time listener for products collection
+    productsListenerUnsubscribe = db.collection("products").onSnapshot(
+        (snapshot) => {
+            const updatedProducts = [];
+
+            snapshot.forEach(doc => {
+                const data = doc.data();
+                // Ensure ID is always a number, even if data has an id field
+                const productId = parseInt(doc.id) || parseInt(data.id) || doc.id;
+                updatedProducts.push({
+                    ...data,
+                    id: productId  // Override any id field in data with parsed document ID
+                });
+            });
+
+            // Update state.products (this is what the UI uses)
+            state.products = updatedProducts;
+
+            // Update PRODUCTS array with Firestore data for backward compatibility
+            if (updatedProducts.length > 0) {
+                // Merge with existing products to preserve any local-only fields
+                updatedProducts.forEach(firestoreProduct => {
+                    // Handle both string and number IDs when finding existing product
+                    const existingIndex = PRODUCTS.findIndex(p => {
+                        return String(p.id) === String(firestoreProduct.id) || p.id === firestoreProduct.id || p.id === parseInt(firestoreProduct.id);
+                    });
+                    if (existingIndex >= 0) {
+                        // Update existing product with Firestore data (especially price)
+                        PRODUCTS[existingIndex] = {
+                            ...PRODUCTS[existingIndex],
+                            ...firestoreProduct,
+                            // Ensure displayPrice is formatted correctly
+                            displayPrice: firestoreProduct.displayPrice || `₹${firestoreProduct.price.toLocaleString()}`
+                        };
+                    } else {
+                        // Add new product from Firestore
+                        PRODUCTS.push({
+                            ...firestoreProduct,
+                            displayPrice: firestoreProduct.displayPrice || `₹${firestoreProduct.price.toLocaleString()}`
+                        });
+                    }
+                });
+
+                // Update window.PRODUCTS reference
+                window.PRODUCTS = PRODUCTS;
+
+                // If a product is currently being viewed, update it with latest Firestore data
+                if (state.currentProduct) {
+                    // Handle both string and number IDs when finding updated product
+                    const updatedProduct = updatedProducts.find(p => {
+                        return String(p.id) === String(state.currentProduct.id) || p.id === state.currentProduct.id || p.id === parseInt(state.currentProduct.id);
+                    });
+                    if (updatedProduct) {
+                        // Merge Firestore updates with current product (preserve selected options state)
+                        state.currentProduct = {
+                            ...state.currentProduct,
+                            ...updatedProduct,
+                            // Preserve all product properties
+                            images: updatedProduct.images || state.currentProduct.images || [state.currentProduct.image],
+                            features: updatedProduct.features || state.currentProduct.features || [],
+                            description: updatedProduct.description || state.currentProduct.description,
+                            displayPrice: updatedProduct.displayPrice || `₹${updatedProduct.price.toLocaleString()}`
+                        };
+                        // Recalculate price with updated base price
+                        app.calculatePrice();
+                    }
+                }
+
+                // Re-render the UI to show updated prices everywhere
+                if (typeof render === "function") {
+                    render();
+                }
+            }
+        },
+        (error) => {
+            console.error("Error in products listener:", error);
+        }
+    );
+}
+
 // Expose app to window for inline event handlers
 window.app = app;
 window.PRODUCTS = PRODUCTS;
@@ -2058,21 +2392,15 @@ document.getElementById("adminRequestForm").addEventListener("submit", async (e)
 
     const username = e.target.username.value.trim();
     const password = e.target.password.value.trim();
-    const submitBtn = e.target.querySelector('button[type="submit"]') || e.target.querySelector('button');
-    if (submitBtn) submitBtn.disabled = true;
 
     const res = await backend.registerAdmin(username, password);
 
-    if (!res || !res.success) {
-        document.getElementById("requestMessage").innerText = res && res.message ? res.message : 'Failed to request admin access';
-    } else {
-        document.getElementById("requestMessage").innerText = res.message || 'Request sent';
-        // Reload pending admins and admin list so UI updates
-        if (typeof loadPendingAdmins === 'function') await loadPendingAdmins();
-        if (typeof app.loadAdminsFromFirebase === 'function') await app.loadAdminsFromFirebase();
-    }
+    document.getElementById("requestMessage").innerText = res.message;
 
-    if (submitBtn) submitBtn.disabled = false;
+    // Reload admins from Firestore after successful registration
+    if (res.success && app.loadAdminsFromFirebase) {
+        await app.loadAdminsFromFirebase();
+    }
 });
 // =======================
 // MAIN ADMIN APPROVAL JS
@@ -2118,8 +2446,8 @@ async function loadPendingAdmins() {
                             <td class="px-6 py-4 font-bold text-gray-900">${a.username}</td>
                             <td class="px-6 py-4 text-gray-500">${requestDate}</td>
                             <td class="px-6 py-4 flex gap-2">
-                                <button onclick="approveAdmin('${a.id}')" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700">Approve</button>
-                                <button onclick="rejectAdmin('${a.id}')" class="bg-red-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-red-700">Reject</button>
+                                <button onclick="app.approveAdmin('${a.id}')" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700">Approve</button>
+                                <button onclick="app.rejectAdmin('${a.id}')" class="bg-red-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-red-700">Reject</button>
                             </td>
                         </tr>
                     `;
@@ -2130,23 +2458,11 @@ async function loadPendingAdmins() {
 }
 
 async function approveAdmin(id) {
-    const res = await backend.updateAdminStatus(id, "approved");
-    if (!res.success) {
-        alert("Failed to approve admin");
-        return;
-    }
-    // Reload both pending list and admin list
-    await loadPendingAdmins();
-    await app.loadAdminsFromFirebase();
+    await backend.updateAdminStatus(id, "approved");
+    loadPendingAdmins();
 }
 
 async function rejectAdmin(id) {
-    const res = await backend.updateAdminStatus(id, "rejected");
-    if (!res.success) {
-        alert("Failed to reject admin");
-        return;
-    }
-    // Reload both pending list and admin list
-    await loadPendingAdmins();
-    await app.loadAdminsFromFirebase();
+    await backend.updateAdminStatus(id, "rejected");
+    loadPendingAdmins();
 }

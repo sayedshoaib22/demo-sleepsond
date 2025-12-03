@@ -97,34 +97,31 @@ const backend = {
   // ADMIN SYSTEM (NEW)
   // =====================
 
-  // 1) Second admin request from any device
+  // 1) Second admin request from any device - PREVENT DUPLICATES
   async registerAdmin(username, password) {
-    try {
-      // Use username as the document ID to prevent duplicate requests
-      const docRef = db.collection("admins").doc(username);
-      const snap = await docRef.get();
+    // Use doc(username) to ensure one document per username
+    const docRef = db.collection("admins").doc(username);
 
-      if (snap.exists) {
-        return {
-          success: false,
-          message: "This username has already requested admin access."
-        };
-      }
-
-      await docRef.set({
-        username,
-        password,
-        role: "admin",
-        status: "pending",
-        isMain: false,
-        createdAt: new Date().toISOString()
-      });
-
-      return { success: true, message: "Request sent to main admin for approval" };
-    } catch (err) {
-      console.error("Error registering admin:", err);
-      return { success: false, message: "Failed to request admin access" };
+    // Check if document already exists
+    const snap = await docRef.get();
+    if (snap.exists) {
+      return {
+        success: false,
+        message: "This username has already requested admin access."
+      };
     }
+
+    // Create new admin document with username as document ID
+    await docRef.set({
+      username,
+      password,
+      role: "admin",
+      isMain: false,
+      status: "pending",
+      createdAt: new Date().toISOString()
+    });
+
+    return { success: true, message: "Request sent to main admin for approval" };
   },
 
   // 2) Admin login (any device)
@@ -202,7 +199,119 @@ const backend = {
       return { success: true, admins };
     } catch (err) {
       console.error("Error fetching admins:", err);
-      return { success: false, admins: [] };
+      return { success: false, message: "Failed to fetch admins" };
+    }
+  },
+
+  // 6) Get all orders from Firestore
+  async getOrders() {
+    try {
+      const snap = await db.collection("orders").get();
+      const orders = snap.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          orderCode: data.orderCode || doc.id,
+          date: data.date,
+          total: data.total,
+          status: data.status,
+          branch: data.branch,
+          items: data.items || [],
+          customer: data.customer || {}
+        };
+      });
+      // Sort by date (newest first)
+      orders.sort((a, b) => new Date(b.date) - new Date(a.date));
+      return { success: true, orders };
+    } catch (err) {
+      console.error("Error fetching orders:", err);
+      return { success: false, message: "Failed to fetch orders" };
+    }
+  },
+
+  // =====================
+  // PRODUCT SYSTEM (REALTIME)
+  // =====================
+
+  // Update product price in Firestore
+  async updateProductPrice(productId, newPrice) {
+    try {
+      const docRef = db.collection("products").doc(String(productId));
+      await docRef.update({
+        price: parseInt(newPrice),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      return { success: true };
+    } catch (err) {
+      console.error("Error updating product price:", err);
+      return { success: false, message: "Failed to update product price" };
+    }
+  },
+
+  // Get all products from Firestore
+  async getProducts() {
+    try {
+      const snap = await db.collection("products").get();
+      const products = snap.docs.map(doc => {
+        const data = doc.data();
+        // Ensure ID is always a number, even if data has an id field
+        const productId = parseInt(doc.id) || parseInt(data.id) || doc.id;
+        return {
+          ...data,
+          id: productId  // Override any id field in data with parsed document ID
+        };
+      });
+      return { success: true, products };
+    } catch (err) {
+      console.error("Error fetching products:", err);
+      return { success: false, message: "Failed to fetch products" };
+    }
+  },
+
+  // Listen to products collection for real-time updates
+  listenToProducts: function (callback) {
+    // callback(productsArray)
+    return db.collection("products").onSnapshot((snap) => {
+      const products = snap.docs.map(doc => {
+        const data = doc.data();
+        // Ensure ID is always a number, even if data has an id field
+        const productId = parseInt(doc.id) || parseInt(data.id) || doc.id;
+        return {
+          ...data,
+          id: productId  // Override any id field in data with parsed document ID
+        };
+      });
+      callback(products);
+    });
+  },
+
+  // Sync products to Firestore (one-time migration)
+  async syncProductsToFirestore(products) {
+    try {
+      const batch = db.batch();
+      products.forEach(product => {
+        const docRef = db.collection("products").doc(String(product.id));
+        batch.set(docRef, {
+          name: product.name,
+          price: product.price,
+          displayPrice: product.displayPrice || `₹${product.price.toLocaleString()}`,
+          originalPrice: product.originalPrice || null,
+          category: product.category,
+          subCategory: product.subCategory || null,
+          image: product.image,
+          images: product.images || [product.image],
+          description: product.description || "",
+          badge: product.badge || null,
+          sku: product.sku || "",
+          features: product.features || [],
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+      });
+      await batch.commit();
+      return { success: true };
+    } catch (err) {
+      console.error("Error syncing products:", err);
+      return { success: false, message: "Failed to sync products" };
     }
   }
 };
