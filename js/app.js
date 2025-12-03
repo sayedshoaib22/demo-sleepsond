@@ -518,13 +518,25 @@ const app = {
     removeAdmin: async (id) => {
         if (!confirm("Are you sure you want to permanently remove this admin account?")) return;
 
+        // Security: Only approved admins can remove others
+        if (!state.adminUser || state.adminUser.status !== 'approved') {
+            alert("Only approved admins can remove accounts.");
+            return;
+        }
+
         const adminToDelete = state.adminUsers.find(a => a.id === id);
 
         if (!adminToDelete) return;
 
-        // Security check for Main Admin
+        // Security check: Main Admin must always remain protected
         if (adminToDelete.username === 'admin' || adminToDelete.isMain) {
             alert("Security Alert: The Main Admin account cannot be removed.");
+            return;
+        }
+
+        // Prevent self-removal
+        if (state.adminUser.id === id) {
+            alert("You cannot remove your own account.");
             return;
         }
 
@@ -532,14 +544,8 @@ const app = {
         try {
             await firebase.firestore().collection("admins").doc(id).delete();
 
-            // If user deletes themselves (edge case)
-            if (state.adminUser && state.adminUser.id === id) {
-                alert("You have removed your own account. Logging out.");
-                app.logout();
-            } else {
-                // Reload admin list from Firebase
-                await app.loadAdminsFromFirebase();
-            }
+            // Reload admin list from Firebase
+            await app.loadAdminsFromFirebase();
         } catch (err) {
             console.error("Error removing admin:", err);
             alert("Failed to remove admin account");
@@ -1521,6 +1527,9 @@ function renderAdminDashboard() {
         // Check if this admin is the MAIN admin
         const isMain = admin.username === 'admin' || admin.isMain === true;
         const isSelf = state.adminUser && state.adminUser.id === admin.id;
+        // Check if current logged-in admin is approved and can remove others
+        const currentAdminApproved = state.adminUser && state.adminUser.status === 'approved';
+        const canRemove = !isMain && currentAdminApproved && !isSelf;
 
         return `
                                         <tr>
@@ -1538,7 +1547,9 @@ function renderAdminDashboard() {
                                             <td class="px-6 py-4">
                                                 ${isMain ?
                 '<span class="text-gray-400 text-xs italic">Protected</span>' :
-                `<button onclick="app.removeAdmin(${admin.id})" class="text-red-600 hover:text-red-800 hover:bg-red-50 px-3 py-1.5 rounded transition-colors text-xs font-bold border border-red-200">Remove</button>`
+                canRemove ?
+                    `<button onclick="app.removeAdmin('${admin.id}')" class="text-red-600 hover:text-red-800 hover:bg-red-50 px-3 py-1.5 rounded transition-colors text-xs font-bold border border-red-200">Remove</button>` :
+                    '<span class="text-gray-400 text-xs italic">N/A</span>'
             }
                                             </td>
                                         </tr>
