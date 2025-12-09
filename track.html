@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fashion Hub - Your Style Destination</title>
+    <title>Track Order - Fashion Hub</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Custom Styles -->
@@ -15,15 +15,24 @@
 
     <div id="root"></div>
 
-    <!-- Scripts -->
-    <!-- QR Code Generator for UPI -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-    
     <script src="js/config.js"></script>
     <script src="js/security.js"></script>
     <script src="js/backend-secure.js"></script>
     <script src="js/ui-utils.js"></script>      ← Add this line
     <script src="js/data.js"></script>
     <script src="js/app.js"></script>
+
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="js/backend.js"></script>
+    
+    <script>
+        // Force tracking view on load
+        window.addEventListener('DOMContentLoaded', () => {
+            if (typeof app !== 'undefined' && typeof app.goToTracking === 'function') {
+                app.goToTracking();
+            }
+        });
+    </script>
 </body>
 </html>

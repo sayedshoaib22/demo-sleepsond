@@ -40,16 +40,31 @@ const state = {
 
     // Product Details Local State
     details: {
-        size: 'Single',
-        measurement: 'Inches',
-        dimensions: '72x30',
-        height: '4',
-        customLength: '72',
-        customWidth: '30',
+        size: 'M',
+        color: 'Black',
         zoom: false,
         currentPrice: 0,
         currentImage: null
-    }
+    },
+    
+    // OTP & Payment States
+    otpModalOpen: false,
+    otpValue: '',
+    otpTimer: 60,
+    generatedOTP: null,
+    pendingUser: null,
+    paymentModalOpen: false,
+    selectedPaymentMethod: null,
+    paymentOTP: null,
+    selectedBranch: null,
+    
+    // UPI Payment States
+    upiPaymentModalOpen: false,
+    currentTransaction: null,
+    paymentCheckInterval: null,
+    
+    // Card Payment States
+    cardPaymentModalOpen: false
 };
 
 // --- INITIALIZATION ---
@@ -223,13 +238,14 @@ const app = {
 
         state.currentProduct = latestProduct;
         state.view = 'home';
+        
+        // Initialize with first available size and color
+        const firstSize = latestProduct.sizes ? Object.keys(latestProduct.sizes)[0] : 'M';
+        const firstColor = latestProduct.colors && latestProduct.colors[0] ? latestProduct.colors[0] : 'Black';
+        
         state.details = {
-            size: 'Single',
-            measurement: 'Inches',
-            dimensions: '72x30',
-            height: '4',
-            customLength: '72',
-            customWidth: '30',
+            size: firstSize,
+            color: firstColor,
             zoom: false,
             currentPrice: latestProduct.price,
             currentImage: latestProduct.image
@@ -280,7 +296,7 @@ const app = {
         }
 
         const order = res.order;
-        const steps = ['Order Placed', 'Packed', 'Out for Delivery', 'Delivered'];
+        const steps = ['Order Placed', 'In Hub', 'Packing', 'Given to Rider', 'Out for Delivery', 'Delivered'];
         const stepIdx = steps.indexOf(order.status);
 
         resultDiv.innerHTML = `
@@ -343,7 +359,8 @@ const app = {
                                         <div class="font-medium text-gray-900">${i.name}</div>
                                         <div class="text-xs text-gray-500">
                                             Qty: ${i.quantity}
-                                            ${i.selectedDimensions ? `• ${i.selectedDimensions}` : ''}
+                                            ${i.selectedSize ? `• Size: ${i.selectedSize}` : ''}
+                                            ${i.selectedColor ? `• ${i.selectedColor}` : ''}
                                         </div>
                                     </div>
                                 </div>
@@ -354,6 +371,25 @@ const app = {
                         `).join('')}
                     </div>
                 </div>
+                ${order.location ? `
+                    <div class="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                        <div class="text-sm font-bold text-blue-900">Current Location</div>
+                        <div class="text-sm text-blue-700">${order.location}</div>
+                    </div>
+                ` : ''}
+                ${order.paymentMethod ? `
+                    <div class="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                        <div class="text-sm font-bold text-gray-900 mb-2">Payment Details</div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-600">Method:</span>
+                            <span class="font-bold text-gray-900">${order.paymentMethod}</span>
+                        </div>
+                        <div class="flex justify-between text-sm mt-1">
+                            <span class="text-gray-600">Status:</span>
+                            <span class="font-bold ${order.paymentStatus === 'Paid' ? 'text-green-600' : 'text-orange-600'}">${order.paymentStatus || 'Pending'}</span>
+                        </div>
+                    </div>
+                ` : ''}
             </div>
         `;
     },
@@ -475,7 +511,7 @@ const app = {
         render();
     },
 
-    login: (e) => {
+      login: (e) => {
         e.preventDefault();
         const email = e.target.email.value;
         const pass = e.target.password.value;
@@ -484,13 +520,50 @@ const app = {
         const user = users.find(u => u.email === email && u.password === pass);
 
         if (user) {
-            state.user = user;
+            // Generate OTP
+            state.generatedOTP = Math.floor(100000 + Math.random() * 900000).toString();
+            state.pendingUser = user;
             state.authModalOpen = false;
+            state.otpModalOpen = true;
+            state.otpTimer = 60;
+            
+            console.log('Demo OTP:', state.generatedOTP);
+            alert('Demo OTP: ' + state.generatedOTP);
+            
+            const interval = setInterval(() => {
+                state.otpTimer--;
+                if (state.otpTimer <= 0) {
+                    clearInterval(interval);
+                    state.otpModalOpen = false;
+                    state.generatedOTP = null;
+                }
+                render();
+            }, 1000);
         } else {
             alert("Invalid Email or Password");
         }
         render();
     },
+
+    verifyOTP: () => {
+        if (state.otpValue === state.generatedOTP) {
+            state.user = state.pendingUser;
+            state.otpModalOpen = false;
+            state.otpValue = '';
+            state.generatedOTP = null;
+            state.pendingUser = null;
+            alert('Login Successful!');
+        } else {
+            alert('Invalid OTP');
+        }
+        render();
+    },
+
+    updateOTP: (value) => {
+        state.otpValue = value;
+        render();
+    },
+
 
     logout: () => {
         state.user = null;
@@ -791,30 +864,24 @@ const app = {
     addToCart: (product, options = {}) => {
         // ✅ 1. Normalized defaults (card se add ho ya detail se – same logic)
         const normalized = {
-            selectedSize: options.selectedSize || 'Single',
-            selectedDimensions: options.selectedDimensions || '72x30',
-            selectedHeight: options.selectedHeight || '4',
-            selectedMeasurement: options.selectedMeasurement || 'Inches'
+            selectedSize: options.selectedSize || 'M',
+            selectedColor: options.selectedColor || (product.colors && product.colors[0]) || 'Black'
         };
 
         // ✅ 2. Check: cart me already same variant hai kya?
         const existing = state.cart.find(item => {
-            const itemSize = item.selectedSize || 'Single';
-            const itemDim = item.selectedDimensions || '72x30';
-            const itemHeight = item.selectedHeight || '4';
-            const itemMeasurement = item.selectedMeasurement || 'Inches';
+            const itemSize = item.selectedSize || 'M';
+            const itemColor = item.selectedColor || 'Black';
 
             return (
                 item.id === product.id &&
                 itemSize === normalized.selectedSize &&
-                itemDim === normalized.selectedDimensions &&
-                itemHeight === normalized.selectedHeight &&
-                itemMeasurement === normalized.selectedMeasurement
+                itemColor === normalized.selectedColor
             );
         });
 
         if (existing) {
-            // ✅ Same product + same size/dimension/height/measurement → sirf quantity badhao
+            // ✅ Same product + same size/color → sirf quantity badhao
             existing.quantity += 1;
 
             // Agar detail page se updated price aa raha ho to usko refresh bhi kar sakte ho (optional)
@@ -852,7 +919,7 @@ const app = {
     },
 
     // Checkout & Orders
-    confirmOrder: async (e) => {
+       confirmOrder: async (e) => {
         e.preventDefault();
 
         const branch = e.target.branch.value;
@@ -866,15 +933,162 @@ const app = {
             return;
         }
 
-        const total = state.cart.reduce(
-            (sum, item) => sum + item.price * item.quantity,
-            0
-        );
+        state.selectedBranch = branch;
+        state.checkoutModalOpen = false;
+        state.paymentModalOpen = true;
+        render();
+    },
 
+    selectPaymentMethod: (method) => {
+        state.selectedPaymentMethod = method;
+        render();
+    },
+
+    processPayment: async () => {
+        if (!state.selectedPaymentMethod) {
+            alert('Please select a payment method');
+            return;
+        }
+
+        const total = state.cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+
+        // COD - Direct order placement
+        if (state.selectedPaymentMethod === 'COD') {
+            await app.completeOrder('COD', 'Pending', null);
+            return;
+        }
+
+        // UPI - Show UPI payment interface
+        if (state.selectedPaymentMethod === 'UPI') {
+            state.upiPaymentModalOpen = true;
+            state.paymentModalOpen = false;
+            render();
+            setTimeout(() => app.generateUPIQR(total), 100);
+            return;
+        }
+
+        // Card - Show card payment form
+        if (state.selectedPaymentMethod === 'Card') {
+            state.cardPaymentModalOpen = true;
+            state.paymentModalOpen = false;
+            render();
+            return;
+        }
+    },
+
+    // Generate UPI Payment QR and Link
+    generateUPIQR: (amount) => {
+        const transactionId = 'TXN' + Date.now();
+        const upiString = `upi://pay?pa=${UPI_CONFIG.upiId}&pn=${encodeURIComponent(UPI_CONFIG.merchantName)}&am=${amount}&cu=INR&tn=${encodeURIComponent('Order Payment')}&tr=${transactionId}`;
+        
+        // Store transaction details
+        state.currentTransaction = {
+            id: transactionId,
+            amount: amount,
+            upiString: upiString,
+            timestamp: Date.now()
+        };
+
+        // Generate QR Code
+        const qrContainer = document.getElementById('upi-qr-code');
+        if (qrContainer) {
+            qrContainer.innerHTML = '';
+            new QRCode(qrContainer, {
+                text: upiString,
+                width: 200,
+                height: 200,
+                colorDark: '#000000',
+                colorLight: '#ffffff',
+                correctLevel: QRCode.CorrectLevel.H
+            });
+        }
+    },
+
+    // Open UPI App
+    openUPIApp: () => {
+        if (state.currentTransaction) {
+            window.location.href = state.currentTransaction.upiString;
+            // Start checking payment status
+            app.startPaymentStatusCheck();
+        }
+    },
+
+    // Copy UPI ID
+    copyUPIId: () => {
+        navigator.clipboard.writeText(UPI_CONFIG.upiId).then(() => {
+            alert('UPI ID copied to clipboard!');
+        });
+    },
+
+    // Start checking payment status
+    startPaymentStatusCheck: () => {
+        state.paymentCheckInterval = setInterval(() => {
+            // In real implementation, check with backend
+            // For now, show manual confirmation
+        }, 3000);
+    },
+
+    // Manual payment confirmation (Admin will verify)
+    confirmPaymentManually: async () => {
+        if (!state.currentTransaction) return;
+        
+        const transactionId = prompt('Enter Transaction ID from your UPI app:');
+        if (!transactionId) return;
+
+        await app.completeOrder('UPI', 'Paid', transactionId);
+        
+        if (state.paymentCheckInterval) {
+            clearInterval(state.paymentCheckInterval);
+        }
+        state.upiPaymentModalOpen = false;
+        state.currentTransaction = null;
+    },
+
+    // Process Card Payment
+    processCardPayment: async () => {
+        const cardNumber = document.getElementById('card-number')?.value;
+        const cardName = document.getElementById('card-name')?.value;
+        const cardExpiry = document.getElementById('card-expiry')?.value;
+        const cardCVV = document.getElementById('card-cvv')?.value;
+
+        if (!cardNumber || !cardName || !cardExpiry || !cardCVV) {
+            alert('Please fill all card details');
+            return;
+        }
+
+        // Basic validation
+        if (cardNumber.replace(/\s/g, '').length !== 16) {
+            alert('Invalid card number');
+            return;
+        }
+
+        if (cardCVV.length !== 3) {
+            alert('Invalid CVV');
+            return;
+        }
+
+        // Simulate payment processing
+        const transactionId = 'CARD' + Date.now();
+        
+        // Show processing
+        alert('Processing payment...');
+        
+        // Simulate delay
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        await app.completeOrder('Card', 'Paid', transactionId);
+        state.cardPaymentModalOpen = false;
+    },
+
+    // Complete order after payment
+    completeOrder: async (paymentMethod, paymentStatus, paymentId) => {
         const payload = {
-            branch,
+            branch: state.selectedBranch,
             items: state.cart,
-            customer: state.user || { name: 'Guest', email: 'guest@example.com' }
+            customer: state.user || { name: 'Guest', email: 'guest@example.com' },
+            paymentMethod: paymentMethod,
+            paymentStatus: paymentStatus,
+            paymentId: paymentId
         };
 
         const res = await backend.createOrder(payload);
@@ -884,40 +1098,70 @@ const app = {
             return;
         }
 
-        const newOrder = res.order;
+        // Reduce stock
+        for (const item of state.cart) {
+            if (item.selectedSize) {
+                await backend.reduceStock(item.id, item.selectedSize, item.quantity);
+            }
+        }
 
-        // Agar admin panel ke liye orders list rakhte ho:
+        const newOrder = res.order;
         if (!state.adminOrders) state.adminOrders = [];
         state.adminOrders.unshift(newOrder);
 
-        // Cart clear
         state.cart = [];
         if (typeof saveCart === 'function') saveCart();
 
-        state.checkoutModalOpen = false;
+        state.paymentModalOpen = false;
+        state.selectedPaymentMethod = null;
         state.lastOrder = newOrder;
 
         if (typeof render === 'function') render();
 
         setTimeout(() => {
-            alert(
-                `Order Placed Successfully!\n` +
-                `Order ID: ${newOrder.orderCode || newOrder.id}\n` +
-                `Please save this ID to track your order.`
-            );
+            alert(`Order Placed Successfully!\nOrder ID: ${newOrder.orderCode || newOrder.id}\nPayment: ${paymentMethod}${paymentId ? '\nPayment ID: ' + paymentId : ''}`);
             if (app && typeof app.goToTracking === 'function') {
                 app.goToTracking();
             }
         }, 300);
     },
 
+
     // Admin Actions
-    updateOrderStatus: (orderId, newStatus) => {
-        const order = state.adminOrders.find(o => o.id === orderId);
-        if (order) {
-            order.status = newStatus;
-            saveOrders();
+    updateOrderStatus: async (orderId, newStatus) => {
+        const res = await backend.updateOrderStatus(orderId, newStatus);
+        if (res.success) {
+            const order = state.adminOrders.find(o => o.id === orderId || o.orderCode === orderId);
+            if (order) {
+                order.status = newStatus;
+                saveOrders();
+            }
             render();
+        } else {
+            alert('Failed to update order status');
+        }
+    },
+
+    updateOrderStatusWithLocation: async (orderId, newStatus, location) => {
+        const res = await backend.updateOrderStatus(orderId, newStatus, location);
+        if (res.success) {
+            const order = state.adminOrders.find(o => o.id === orderId || o.orderCode === orderId);
+            if (order) {
+                order.status = newStatus;
+                if (location) order.location = location;
+                saveOrders();
+            }
+            render();
+        }
+    },
+
+    requestNotifyStock: async (productId, size) => {
+        const email = state.user ? state.user.email : prompt('Enter your email:');
+        if (!email) return;
+        
+        const res = await backend.addStockNotification(productId, size, email);
+        if (res.success) {
+            alert('You will be notified when back in stock!');
         }
     },
 
@@ -1049,13 +1293,11 @@ const app = {
     },
 
     addToCartCurrent: () => {
-        const { size, dimensions, height, measurement, customLength, customWidth, currentPrice } = state.details;
+        const { size, color, currentPrice } = state.details;
         // Ensure we use the calculated final price and all selected options
         app.addToCart({ ...state.currentProduct, price: currentPrice }, {
             selectedSize: size,
-            selectedDimensions: dimensions === 'custom' ? `${customLength}x${customWidth}` : dimensions,
-            selectedHeight: height,
-            selectedMeasurement: measurement,
+            selectedColor: color,
             price: currentPrice  // Explicitly pass the calculated price
         });
     },
@@ -1077,8 +1319,8 @@ function renderHeader() {
                             ${ICONS.logoMoon}
                         </div>
                         <div class="flex flex-col">
-                            <span class="text-xl font-bold text-gray-900 tracking-tight leading-none group-hover:text-[#FF6B35] transition-colors">SLEEP SOUND</span>
-                            <span class="text-[10px] text-gray-500 font-medium tracking-widest uppercase">Premium Comfort</span>
+                            <span class="text-xl font-bold text-gray-900 tracking-tight leading-none group-hover:text-[#FF6B35] transition-colors">FASHION HUB</span>
+                            <span class="text-[10px] text-gray-500 font-medium tracking-widest uppercase">Your Style Destination</span>
                         </div>
                     </div>
 
@@ -1096,14 +1338,7 @@ function renderHeader() {
                     </div>
 
                     <div class="flex items-center space-x-4 md:space-x-6">
-                        <button onclick="app.goToTracking()" class="hidden md:flex items-center text-sm font-medium text-gray-600 hover:text-[#FF6B35] transition-colors">
-                            Track Order
-                        </button>
-                        
-                        <!-- Admin Button -->
-                        <button onclick="app.goToAdmin()" class="hidden md:flex items-center text-sm font-medium text-gray-600 hover:text-[#FF6B35] transition-colors gap-1">
-                             ${ICONS.lock} Admin
-                        </button>
+                        <!-- Track Order and Admin buttons hidden - access via track.html and admin.html -->
 
                         ${state.user ? `
                             <div class="flex items-center gap-2">
@@ -1199,8 +1434,7 @@ function renderHeader() {
                             </button>
                         </div>
                     `).join('')}
-                    <button onclick="app.goToTracking(); app.toggleMobileMenu()" class="block w-full text-left px-4 py-3 text-gray-700 font-medium hover:bg-orange-50 rounded">Track Order</button>
-                    <button onclick="app.goToAdmin(); app.toggleMobileMenu()" class="block w-full text-left px-4 py-3 text-gray-700 font-medium hover:bg-orange-50 rounded">Admin Login</button>
+                    <!-- Track Order and Admin hidden from mobile menu -->
                 </nav>
             </div>
         ` : ''}
@@ -1240,12 +1474,12 @@ function renderHero() {
 
 function renderCategoryCards() {
     const categories = [
-        { name: 'Mattress', category: 'Mattress', image: 'https://images.unsplash.com/photo-1540555700478-4be289fbecef?auto=format&fit=crop&q=80&w=400' },
-        { name: 'Bedroom', category: 'Bedroom', image: 'https://images.unsplash.com/photo-1505693416388-b0346efee535?auto=format&fit=crop&q=80&w=400' },
-        { name: 'Living', category: 'Living', image: 'https://images.unsplash.com/photo-1555041469-a586c61ea9bc?auto=format&fit=crop&q=80&w=400' },
-        { name: 'Dining', category: 'Dining', image: 'https://images.unsplash.com/photo-1617806118233-18e1de247200?auto=format&fit=crop&q=80&w=400' },
-        { name: 'Study', category: 'Office', image: 'https://images.unsplash.com/photo-1518455027359-f3f8164ba6bd?auto=format&fit=crop&q=80&w=400' },
-        { name: 'Decor', category: 'Decor', image: 'https://images.unsplash.com/photo-1586023492125-27b2c045efd7?auto=format&fit=crop&q=80&w=400' }
+        { name: 'Men', category: 'Men', image: 'https://images.unsplash.com/photo-1490114538077-0a7f8cb49891?auto=format&fit=crop&q=80&w=400' },
+        { name: 'Women', category: 'Women', image: 'https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&q=80&w=400' },
+        { name: 'Kids', category: 'Kids', image: 'https://images.unsplash.com/photo-1503944583220-79d8926ad5e2?auto=format&fit=crop&q=80&w=400' },
+        { name: 'Footwear', category: 'Footwear', image: 'https://images.unsplash.com/photo-1460353581641-37baddab0fa2?auto=format&fit=crop&q=80&w=400' },
+        { name: 'Accessories', category: 'Accessories', image: 'https://images.unsplash.com/photo-1492707892479-7bc8d5a4ee93?auto=format&fit=crop&q=80&w=400' },
+        { name: 'New Arrivals', category: 'Men', image: 'https://images.unsplash.com/photo-1441984904996-e0b6ba687e04?auto=format&fit=crop&q=80&w=400' }
     ];
     return `
     <section class="py-16 bg-white">
@@ -1253,7 +1487,7 @@ function renderCategoryCards() {
             <h2 class="text-2xl md:text-3xl font-bold mb-10 text-center text-gray-900 tracking-tight">Shop By Category</h2>
             <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 md:gap-8">
                 ${categories.map(cat => `
-                    <div onclick="${cat.category === 'Decor' ? '' : `app.selectCategory('${cat.category}')`}" class="group cursor-pointer">
+                    <div onclick="app.selectCategory('${cat.category}')" class="group cursor-pointer">
                         <div class="relative aspect-square bg-gray-100 rounded-2xl overflow-hidden shadow-sm group-hover:shadow-xl transition-all duration-300 mb-4 border border-gray-100">
                             <img src="${cat.image}" alt="${cat.name}" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" loading="lazy" />
                             <div class="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors"></div>
@@ -1400,10 +1634,15 @@ function renderProductDetails() {
     const discount = scaledOriginalPrice ? Math.round((1 - currentPrice / scaledOriginalPrice) * 100) : 0;
     const galleryImages = product.images && product.images.length > 0 ? product.images : [product.image];
 
-    const sizes = ['Single', 'Double', 'Queen', 'King'];
-    const measurements = ['Inches', 'Centimeter', 'Feet'];
-    const dimList = ['72x30', '78x30', '75x30', '84x30', '72x36', '75x36', '78x36', '84x36'];
-    const heights = ['4', '5', '6', '8'];
+    // Dynamic sizes based on product category
+    let sizes = ['S', 'M', 'L', 'XL', 'XXL']; // Default for shirts, t-shirts, etc.
+    
+    // Check if product is jeans/pants - use waist sizes
+    if (product.subCategory && (product.subCategory.toLowerCase().includes('jean') || 
+        product.subCategory.toLowerCase().includes('trouser') || 
+        product.subCategory.toLowerCase().includes('pant'))) {
+        sizes = ['28', '30', '32', '34', '36', '38'];
+    }
 
     return `
     <section class="bg-white py-8 md:py-12 animate-fade-in min-h-screen">
@@ -1457,52 +1696,57 @@ function renderProductDetails() {
                                 1. Choose Size Category
                             </h3>
                             <div class="flex flex-wrap gap-3">
-                                ${sizes.map(s => `
-                                    <button onclick="app.updateDetail('size', '${s}')" class="px-6 py-3 border rounded-xl font-medium transition-all duration-200 ${details.size === s ? 'border-[#FF6B35] bg-orange-50 text-[#FF6B35] shadow-sm ring-1 ring-[#FF6B35]' : 'border-gray-200 text-gray-600 hover:border-[#FF6B35] hover:text-[#FF6B35]'}">${s}</button>
-                                `).join('')}
+                                ${sizes.map(s => {
+                                    const sizeData = product.sizes && product.sizes[s];
+                                    const stock = sizeData ? sizeData.stock : 0;
+                                    const isOutOfStock = stock <= 0;
+                                    
+                                    return `
+                                        <button onclick="${isOutOfStock ? '' : `app.updateDetail('size', '${s}')`}" 
+                                            class="px-6 py-3 border rounded-xl font-medium transition-all duration-200 ${isOutOfStock ? 'opacity-50 cursor-not-allowed border-gray-200' : details.size === s ? 'border-[#FF6B35] bg-orange-50 text-[#FF6B35] shadow-sm ring-1 ring-[#FF6B35]' : 'border-gray-200 text-gray-600 hover:border-[#FF6B35] hover:text-[#FF6B35]'}"
+                                            ${isOutOfStock ? 'disabled' : ''}>
+                                            ${s}
+                                            ${isOutOfStock ? '<span class="block text-[10px] text-red-500">Out of Stock</span>' : stock < 10 ? `<span class="block text-[10px] text-orange-500">${stock} left</span>` : ''}
+                                        </button>
+                                    `;
+                                }).join('')}
                             </div>
-                        </div>
-
-                        <div>
-                            <div class="flex justify-between items-center mb-3">
-                                <h3 class="text-sm font-bold text-gray-900 uppercase tracking-wider">2. Dimensions</h3>
-                                <div class="flex bg-gray-100 p-1 rounded-lg">
-                                    ${measurements.map(m => `
-                                        <button onclick="app.updateDetail('measurement', '${m}')" class="px-3 py-1 text-xs font-medium rounded-md transition-all ${details.measurement === m ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-900'}">${m}</button>
-                                    `).join('')}
-                                </div>
-                            </div>
-                            
-                            <div class="grid grid-cols-3 sm:grid-cols-4 gap-3">
-                                ${dimList.map(d => `
-                                    <button onclick="app.updateDetail('dimensions', '${d}')" class="px-2 py-3 border rounded-lg text-sm font-medium transition-all duration-200 ${details.dimensions === d ? 'border-[#FF6B35] bg-orange-50 text-[#FF6B35] shadow-sm ring-1 ring-[#FF6B35]' : 'border-gray-200 text-gray-600 hover:border-[#FF6B35]'}">${d}</button>
-                                `).join('')}
-                                <button onclick="app.updateDetail('dimensions', 'custom')" class="px-2 py-3 border rounded-lg text-sm font-medium transition-all duration-200 ${details.dimensions === 'custom' ? 'border-[#FF6B35] bg-orange-50 text-[#FF6B35] shadow-sm ring-1 ring-[#FF6B35]' : 'border-dashed border-gray-300 text-gray-500 hover:border-[#FF6B35]'}">Custom Size</button>
-                            </div>
-                            
-                            ${details.dimensions === 'custom' ? `
-                                <div class="mt-4 p-5 bg-orange-50/50 rounded-xl border border-orange-100 flex flex-wrap items-center gap-4 animate-fade-in">
-                                    <div class="flex-1 min-w-[100px]">
-                                        <label class="text-xs text-gray-500 font-bold uppercase block mb-1">Length (${details.measurement})</label>
-                                        <input type="number" value="${details.customLength}" oninput="updateCustomSize('customLength', this.value)" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:border-[#FF6B35] focus:ring-1 focus:ring-[#FF6B35] outline-none bg-white font-bold text-gray-900" />
-                                    </div>
-                                    <span class="text-gray-400 mt-5 font-light text-xl">×</span>
-                                    <div class="flex-1 min-w-[100px]">
-                                        <label class="text-xs text-gray-500 font-bold uppercase block mb-1">Width (${details.measurement})</label>
-                                        <input type="number" value="${details.customWidth}" oninput="updateCustomSize('customWidth', this.value)" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:border-[#FF6B35] focus:ring-1 focus:ring-[#FF6B35] outline-none bg-white font-bold text-gray-900" />
-                                    </div>
+                            ${product.sizes && product.sizes[details.size] && product.sizes[details.size].stock <= 0 ? `
+                                <div class="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+                                    <p class="text-sm text-red-700 mb-2">This size is currently out of stock</p>
+                                    <button onclick="app.requestNotifyStock(${product.id}, '${details.size}')" 
+                                        class="text-sm text-[#FF6B35] font-bold hover:underline">
+                                        Notify me when available
+                                    </button>
                                 </div>
                             ` : ''}
                         </div>
 
                         <div>
-                            <h3 class="text-sm font-bold text-gray-900 mb-3 uppercase tracking-wider">3. Thickness (Height)</h3>
+                            <h3 class="text-sm font-bold text-gray-900 mb-3 uppercase tracking-wider">2. Choose Color</h3>
                             <div class="flex flex-wrap gap-3">
-                                ${heights.map(h => `
-                                    <button onclick="app.updateDetail('height', '${h}')" class="px-6 py-3 border rounded-xl font-medium transition-all duration-200 ${details.height === h ? 'border-[#FF6B35] bg-orange-50 text-[#FF6B35] shadow-sm ring-1 ring-[#FF6B35]' : 'border-gray-200 text-gray-600 hover:border-[#FF6B35]'}">
-                                        ${h}" ${parseInt(h) > 4 ? `<span class="text-[10px] ml-1 bg-orange-100 text-[#FF6B35] px-1 rounded">+₹${(parseInt(h) - 4) * 500}</span>` : ''}
-                                    </button>
-                                `).join('')}
+                                ${(product.colors || ['Black', 'White', 'Navy', 'Gray']).map(color => {
+                                    const colorMap = {
+                                        'Black': '#000000',
+                                        'White': '#FFFFFF',
+                                        'Navy': '#001F3F',
+                                        'Gray': '#808080',
+                                        'Blue': '#0074D9',
+                                        'Red': '#FF4136',
+                                        'Green': '#2ECC40',
+                                        'Beige': '#F5F5DC',
+                                        'Brown': '#8B4513',
+                                        'Pink': '#FF69B4'
+                                    };
+                                    const colorCode = colorMap[color] || '#000000';
+                                    return `
+                                        <button onclick="app.updateDetail('color', '${color}')" 
+                                            class="flex items-center gap-2 px-4 py-3 border rounded-xl font-medium transition-all duration-200 ${details.color === color ? 'border-[#FF6B35] bg-orange-50 text-[#FF6B35] shadow-sm ring-1 ring-[#FF6B35]' : 'border-gray-200 text-gray-600 hover:border-[#FF6B35]'}">
+                                            <span class="w-6 h-6 rounded-full border-2 ${color === 'White' ? 'border-gray-300' : 'border-gray-200'}" style="background-color: ${colorCode};"></span>
+                                            ${color}
+                                        </button>
+                                    `;
+                                }).join('')}
                             </div>
                         </div>
                     </div>
@@ -1585,9 +1829,9 @@ function renderCartDrawer() {
                                     </button>
                                 </div>
                                 <p class="text-xs text-gray-500 mb-2">${item.category}</p>
-                                ${item.selectedDimensions ? `
+                                ${item.selectedSize || item.selectedColor ? `
                                     <div class="text-[10px] bg-gray-100 inline-flex items-center px-2 py-1 rounded text-gray-600 mb-2 border border-gray-200">
-                                        ${item.selectedSize} • ${item.selectedDimensions} • ${item.selectedHeight}"
+                                        ${item.selectedSize ? `Size: ${item.selectedSize}` : ''}${item.selectedSize && item.selectedColor ? ' • ' : ''}${item.selectedColor ? `Color: ${item.selectedColor}` : ''}
                                     </div>
                                 ` : ''}
                             </div>
@@ -1922,6 +2166,8 @@ function renderAdminDashboard() {
                                     <th class="px-6 py-4">Total</th>
                                     <th class="px-6 py-4">Status</th>
                                     <th class="px-6 py-4">Action</th>
+                                    <th class="px-6 py-4">Location</th>
+                                    <th class="px-6 py-4">Payment</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-gray-100 text-sm">
@@ -1944,11 +2190,25 @@ function renderAdminDashboard() {
                                         </td>
                                         <td class="px-6 py-4">
                                             <select onchange="app.updateOrderStatus('${order.id}', this.value)" class="border border-gray-300 rounded text-xs p-1">
-                                                <option value="Order Placed" ${order.status === 'Order Placed' ? 'selected' : ''}>Placed</option>
-                                                <option value="Packed" ${order.status === 'Packed' ? 'selected' : ''}>Packed</option>
+                                                <option value="Order Placed" ${order.status === 'Order Placed' ? 'selected' : ''}>Order Placed</option>
+                                                <option value="In Hub" ${order.status === 'In Hub' ? 'selected' : ''}>In Hub</option>
+                                                <option value="Packing" ${order.status === 'Packing' ? 'selected' : ''}>Packing</option>
+                                                <option value="Given to Rider" ${order.status === 'Given to Rider' ? 'selected' : ''}>Given to Rider</option>
                                                 <option value="Out for Delivery" ${order.status === 'Out for Delivery' ? 'selected' : ''}>Out for Delivery</option>
                                                 <option value="Delivered" ${order.status === 'Delivered' ? 'selected' : ''}>Delivered</option>
                                             </select>
+                                        </td>
+                                        <td class="px-6 py-4">
+                                            <input type="text" value="${order.location || ''}" 
+                                                onchange="app.updateOrderStatusWithLocation('${order.id}', '${order.status}', this.value)"
+                                                class="border border-gray-300 rounded px-2 py-1 text-xs w-32" 
+                                                placeholder="Location" />
+                                        </td>
+                                        <td class="px-6 py-4">
+                                            <div class="text-xs">
+                                                <div class="font-bold">${order.paymentMethod || 'N/A'}</div>
+                                                <div class="${order.paymentStatus === 'Paid' ? 'text-green-600' : 'text-orange-600'}">${order.paymentStatus || 'N/A'}</div>
+                                            </div>
                                         </td>
                                     </tr>
                                 `).join('')}
@@ -2084,6 +2344,206 @@ function renderAuthModal() {
     `;
 }
 
+function renderOTPModal() {
+    if (!state.otpModalOpen) return '';
+    return `
+    <div class="fixed inset-0 z-[100] flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+        <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-8 animate-fade-in">
+            <h3 class="text-2xl font-bold text-gray-900 mb-2">Verify OTP</h3>
+            <p class="text-sm text-gray-500 mb-6">Enter the 6-digit code</p>
+            
+            <input type="text" maxlength="6" value="${state.otpValue}" oninput="app.updateOTP(this.value)" 
+                class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg text-center text-2xl font-bold tracking-widest focus:ring-2 focus:ring-[#FF6B35] outline-none mb-4" 
+                placeholder="000000" />
+            
+            <div class="text-center mb-6">
+                <span class="text-lg font-bold text-[#FF6B35]">${state.otpTimer}s</span>
+            </div>
+            
+            <button onclick="app.verifyOTP()" class="w-full py-3 bg-[#FF6B35] text-white font-bold rounded-lg hover:bg-[#e55a2b] mb-3">
+                Verify OTP
+            </button>
+            <button onclick="state.otpModalOpen = false; render();" class="w-full py-3 border border-gray-300 rounded-lg">
+                Cancel
+            </button>
+        </div>
+    </div>
+    `;
+}
+
+function renderPaymentModal() {
+    if (!state.paymentModalOpen) return '';
+    const total = state.cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+    
+    return `
+    <div class="fixed inset-0 z-[100] flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" onclick="state.paymentModalOpen = false; render();"></div>
+        <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-fade-in">
+            <div class="p-6 border-b border-gray-100">
+                <h3 class="text-xl font-bold text-gray-900">Select Payment Method</h3>
+                <p class="text-sm text-gray-500 mt-1">Total: ₹${total.toLocaleString()}</p>
+            </div>
+            
+            <div class="p-6 space-y-3">
+                ${[
+                    { method: 'UPI', title: 'UPI Payment', desc: 'Pay via Google Pay, PhonePe, Paytm' },
+                    { method: 'Card', title: 'Credit/Debit Card', desc: 'Visa, Mastercard, Rupay accepted' },
+                    { method: 'COD', title: 'Cash on Delivery', desc: 'Pay when you receive' }
+                ].map(({ method, title, desc }) => `
+                    <button onclick="app.selectPaymentMethod('${method}')" 
+                        class="w-full p-4 border-2 rounded-lg text-left transition-all ${state.selectedPaymentMethod === method ? 'border-[#FF6B35] bg-orange-50' : 'border-gray-200 hover:border-[#FF6B35]'}">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <div class="font-bold text-gray-900">${title}</div>
+                                <div class="text-xs text-gray-500">${desc}</div>
+                            </div>
+                            ${state.selectedPaymentMethod === method ? '<div class="w-5 h-5 bg-[#FF6B35] rounded-full flex items-center justify-center text-white">✓</div>' : ''}
+                        </div>
+                    </button>
+                `).join('')}
+            </div>
+            
+            <div class="p-6 border-t border-gray-100">
+                <button onclick="app.processPayment()" class="w-full py-3 bg-[#FF6B35] text-white font-bold rounded-lg hover:bg-[#e55a2b]">
+                    Proceed to Pay
+                </button>
+            </div>
+        </div>
+    </div>
+    `;
+}
+
+function renderUPIPaymentModal() {
+    if (!state.upiPaymentModalOpen) return '';
+    const total = state.cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+    
+    return `
+    <div class="fixed inset-0 z-[100] flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+        <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-fade-in">
+            <div class="p-6 border-b border-gray-100 flex justify-between items-center">
+                <div>
+                    <h3 class="text-xl font-bold text-gray-900">UPI Payment</h3>
+                    <p class="text-sm text-gray-500 mt-1">Amount: ₹${total.toLocaleString()}</p>
+                </div>
+                <button onclick="state.upiPaymentModalOpen = false; render();" class="text-gray-400 hover:text-gray-600">
+                    ${ICONS.close}
+                </button>
+            </div>
+            
+            <div class="p-6 space-y-6">
+                <!-- QR Code -->
+                <div class="flex flex-col items-center">
+                    <div class="bg-white p-4 rounded-xl border-2 border-gray-200 mb-4">
+                        <div id="upi-qr-code"></div>
+                    </div>
+                    <p class="text-sm text-gray-600 text-center">Scan QR code with any UPI app</p>
+                </div>
+
+                <!-- UPI Apps -->
+                <div class="grid grid-cols-4 gap-3">
+                    <button onclick="app.openUPIApp()" class="flex flex-col items-center gap-2 p-3 rounded-lg hover:bg-gray-50 transition-colors">
+                        <div class="w-12 h-12 bg-gradient-to-br from-green-400 to-green-600 rounded-full flex items-center justify-center text-white font-bold text-xs">GPay</div>
+                        <span class="text-xs text-gray-600">Google Pay</span>
+                    </button>
+                    <button onclick="app.openUPIApp()" class="flex flex-col items-center gap-2 p-3 rounded-lg hover:bg-gray-50 transition-colors">
+                        <div class="w-12 h-12 bg-gradient-to-br from-purple-500 to-purple-700 rounded-full flex items-center justify-center text-white font-bold text-xs">PhonePe</div>
+                        <span class="text-xs text-gray-600">PhonePe</span>
+                    </button>
+                    <button onclick="app.openUPIApp()" class="flex flex-col items-center gap-2 p-3 rounded-lg hover:bg-gray-50 transition-colors">
+                        <div class="w-12 h-12 bg-gradient-to-br from-blue-400 to-blue-600 rounded-full flex items-center justify-center text-white font-bold text-xs">Paytm</div>
+                        <span class="text-xs text-gray-600">Paytm</span>
+                    </button>
+                    <button onclick="app.openUPIApp()" class="flex flex-col items-center gap-2 p-3 rounded-lg hover:bg-gray-50 transition-colors">
+                        <div class="w-12 h-12 bg-gradient-to-br from-orange-400 to-red-500 rounded-full flex items-center justify-center text-white font-bold text-xs">BHIM</div>
+                        <span class="text-xs text-gray-600">BHIM</span>
+                    </button>
+                </div>
+
+                <!-- UPI ID -->
+                <div class="bg-gray-50 p-4 rounded-lg">
+                    <p class="text-xs text-gray-500 mb-2">Or pay directly to UPI ID:</p>
+                    <div class="flex items-center gap-2">
+                        <input type="text" value="${UPI_CONFIG.upiId}" readonly class="flex-1 px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm font-mono" />
+                        <button onclick="app.copyUPIId()" class="px-4 py-2 bg-[#FF6B35] text-white rounded-lg text-sm font-bold hover:bg-[#e55a2b]">Copy</button>
+                    </div>
+                </div>
+
+                <!-- Manual Confirmation -->
+                <div class="border-t border-gray-200 pt-4">
+                    <p class="text-xs text-gray-500 mb-3">After completing payment, enter your transaction ID:</p>
+                    <button onclick="app.confirmPaymentManually()" class="w-full py-3 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700">
+                        I Have Paid - Confirm Order
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    `;
+}
+
+function renderCardPaymentModal() {
+    if (!state.cardPaymentModalOpen) return '';
+    const total = state.cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+    
+    return `
+    <div class="fixed inset-0 z-[100] flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+        <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-fade-in">
+            <div class="p-6 border-b border-gray-100 flex justify-between items-center">
+                <div>
+                    <h3 class="text-xl font-bold text-gray-900">Card Payment</h3>
+                    <p class="text-sm text-gray-500 mt-1">Amount: ₹${total.toLocaleString()}</p>
+                </div>
+                <button onclick="state.cardPaymentModalOpen = false; render();" class="text-gray-400 hover:text-gray-600">
+                    ${ICONS.close}
+                </button>
+            </div>
+            
+            <div class="p-6 space-y-4">
+                <div>
+                    <label class="block text-sm font-bold text-gray-700 mb-2">Card Number</label>
+                    <input type="text" id="card-number" maxlength="19" placeholder="1234 5678 9012 3456" 
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-[#FF6B35] focus:ring-1 focus:ring-[#FF6B35] outline-none"
+                        oninput="this.value = this.value.replace(/\s/g, '').replace(/(\d{4})/g, '$1 ').trim()" />
+                </div>
+
+                <div>
+                    <label class="block text-sm font-bold text-gray-700 mb-2">Cardholder Name</label>
+                    <input type="text" id="card-name" placeholder="JOHN DOE" 
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-[#FF6B35] focus:ring-1 focus:ring-[#FF6B35] outline-none uppercase" />
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-bold text-gray-700 mb-2">Expiry Date</label>
+                        <input type="text" id="card-expiry" maxlength="5" placeholder="MM/YY" 
+                            class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-[#FF6B35] focus:ring-1 focus:ring-[#FF6B35] outline-none"
+                            oninput="this.value = this.value.replace(/\D/g, '').replace(/(\d{2})(\d)/, '$1/$2').substr(0, 5)" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-gray-700 mb-2">CVV</label>
+                        <input type="password" id="card-cvv" maxlength="3" placeholder="123" 
+                            class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-[#FF6B35] focus:ring-1 focus:ring-[#FF6B35] outline-none"
+                            oninput="this.value = this.value.replace(/\D/g, '')" />
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-2 text-xs text-gray-500 bg-gray-50 p-3 rounded-lg">
+                    ${ICONS.lock}
+                    <span>Your card details are secure and encrypted</span>
+                </div>
+
+                <button onclick="app.processCardPayment()" class="w-full py-3 bg-[#FF6B35] text-white font-bold rounded-lg hover:bg-[#e55a2b] mt-4">
+                    Pay ₹${total.toLocaleString()}
+                </button>
+            </div>
+        </div>
+    </div>
+    `;
+}
+
 function renderFooter() {
     return `
     <footer class="bg-gray-900 text-gray-400 py-16 border-t border-gray-800">
@@ -2092,9 +2552,9 @@ function renderFooter() {
                 <div>
                     <div class="flex items-center gap-2 mb-6">
                         <div class="w-8 h-8 text-white">${ICONS.logoMoon}</div>
-                        <span class="text-xl font-bold text-white tracking-tight">SLEEP SOUND</span>
+                        <span class="text-xl font-bold text-white tracking-tight">FASHION HUB</span>
                     </div>
-                    <p class="text-sm leading-relaxed mb-6">Experience the perfect blend of comfort and style. India's most trusted sleep solutions and furniture brand since 2010.</p>
+                    <p class="text-sm leading-relaxed mb-6">Experience the perfect blend of style and comfort. India's most trusted fashion destination for trendy clothing and accessories since 2010.</p>
                     <div class="flex gap-4">
                         <a href="#" class="w-8 h-8 bg-gray-800 rounded-full flex items-center justify-center hover:bg-[#FF6B35] hover:text-white transition-colors">fb</a>
                         <a href="#" class="w-8 h-8 bg-gray-800 rounded-full flex items-center justify-center hover:bg-[#FF6B35] hover:text-white transition-colors">in</a>
@@ -2104,19 +2564,19 @@ function renderFooter() {
                 <div>
                     <h4 class="text-white font-bold mb-6">Shop</h4>
                     <ul class="space-y-3 text-sm">
-                        <li><a href="#" class="hover:text-[#FF6B35] transition-colors">Mattresses</a></li>
-                        <li><a href="#" class="hover:text-[#FF6B35] transition-colors">Bed Frames</a></li>
-                        <li><a href="#" class="hover:text-[#FF6B35] transition-colors">Sofas & Recliners</a></li>
-                        <li><a href="#" class="hover:text-[#FF6B35] transition-colors">Custom Size</a></li>
+                        <li><a href="#" class="hover:text-[#FF6B35] transition-colors">Men's Fashion</a></li>
+                        <li><a href="#" class="hover:text-[#FF6B35] transition-colors">Women's Fashion</a></li>
+                        <li><a href="#" class="hover:text-[#FF6B35] transition-colors">Kids Collection</a></li>
+                        <li><a href="#" class="hover:text-[#FF6B35] transition-colors">Accessories</a></li>
                     </ul>
                 </div>
                 <div>
                     <h4 class="text-white font-bold mb-6">Support</h4>
                     <ul class="space-y-3 text-sm">
-                        <li><a onclick="app.goToTracking()" class="cursor-pointer hover:text-[#FF6B35] transition-colors">Track Order</a></li>
+                        <li><a href="#" class="hover:text-[#FF6B35] transition-colors">Contact Us</a></li>
                         <li><a href="#" class="hover:text-[#FF6B35] transition-colors">Warranty Policy</a></li>
                         <li><a href="#" class="hover:text-[#FF6B35] transition-colors">Return & Refund</a></li>
-                        <li><a onclick="app.goToAdmin()" class="cursor-pointer hover:text-gray-200 transition-colors text-gray-600">Admin Login</a></li>
+                        <li><a href="#" class="hover:text-[#FF6B35] transition-colors">FAQs</a></li>
                     </ul>
                 </div>
                 <div>
@@ -2129,7 +2589,7 @@ function renderFooter() {
                 </div>
             </div>
             <div class="border-t border-gray-800 pt-8 text-center text-sm">
-                <p>&copy; 2024 Sleep Sound. All rights reserved. Designed for Excellence.</p>
+                <p>&copy; 2024 Fashion Hub. All rights reserved. Designed for Excellence.</p>
             </div>
         </div>
     </footer>
@@ -2142,15 +2602,15 @@ function renderBadges() {
        <div class="max-w-7xl mx-auto px-4 md:px-6 grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
           <div class="flex flex-col items-center group">
             <div class="w-16 h-16 bg-white rounded-full flex items-center justify-center text-[#FF6B35] mb-4 shadow-sm group-hover:scale-110 transition-transform">${ICONS.feature}</div>
-            <h4 class="font-bold text-gray-900 mb-1">100 Night Trial</h4><p class="text-sm text-gray-500">Try it risk-free at home</p>
+            <h4 class="font-bold text-gray-900 mb-1">Easy Returns</h4><p class="text-sm text-gray-500">7 days return policy</p>
           </div>
           <div class="flex flex-col items-center group">
             <div class="w-16 h-16 bg-white rounded-full flex items-center justify-center text-[#FF6B35] mb-4 shadow-sm group-hover:scale-110 transition-transform"><svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg></div>
-            <h4 class="font-bold text-gray-900 mb-1">Free Delivery</h4><p class="text-sm text-gray-500">Across all major cities</p>
+            <h4 class="font-bold text-gray-900 mb-1">Free Delivery</h4><p class="text-sm text-gray-500">On orders above ₹999</p>
           </div>
           <div class="flex flex-col items-center group">
             <div class="w-16 h-16 bg-white rounded-full flex items-center justify-center text-[#FF6B35] mb-4 shadow-sm group-hover:scale-110 transition-transform"><svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>
-            <h4 class="font-bold text-gray-900 mb-1">10 Year Warranty</h4><p class="text-sm text-gray-500">Guaranteed durability</p>
+            <h4 class="font-bold text-gray-900 mb-1">Quality Assured</h4><p class="text-sm text-gray-500">100% authentic products</p>
           </div>
            <div class="flex flex-col items-center group">
             <div class="w-16 h-16 bg-white rounded-full flex items-center justify-center text-[#FF6B35] mb-4 shadow-sm group-hover:scale-110 transition-transform"><svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>
@@ -2232,6 +2692,10 @@ function render() {
         ${renderCartDrawer()}
         ${renderCheckoutModal()}
         ${renderAuthModal()}
+        ${renderOTPModal()}
+        ${renderPaymentModal()}
+        ${renderUPIPaymentModal()}
+        ${renderCardPaymentModal()}
         ${renderCategoryModal()}
     `;
 }
@@ -2387,21 +2851,7 @@ window.PRODUCTS = PRODUCTS;
 
 // Start App
 initApp();
-document.getElementById("adminRequestForm").addEventListener("submit", async (e) => {
-    e.preventDefault();
 
-    const username = e.target.username.value.trim();
-    const password = e.target.password.value.trim();
-
-    const res = await backend.registerAdmin(username, password);
-
-    document.getElementById("requestMessage").innerText = res.message;
-
-    // Reload admins from Firestore after successful registration
-    if (res.success && app.loadAdminsFromFirebase) {
-        await app.loadAdminsFromFirebase();
-    }
-});
 // =======================
 // MAIN ADMIN APPROVAL JS
 // =======================
